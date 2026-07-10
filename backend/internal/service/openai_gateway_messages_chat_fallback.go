@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -83,10 +84,18 @@ func (s *OpenAIGatewayService) forwardAnthropicViaRawChatCompletions(
 	if normalizedBody, normalized := NormalizeGLMOpenAIReasoningEffort(chatBody, upstreamModel); normalized {
 		chatBody = normalizedBody
 	}
-	// Unlike forwardResponsesViaRawChatCompletions, applyOpenAIFastPolicyToBody
-	// is intentionally skipped: Anthropic Messages bodies carry no service_tier,
-	// so the converted Chat Completions body never contains one and the policy
-	// would always be a no-op on this path.
+	// 3. 账号级 Fast 模式可在原请求缺少 service_tier 时主动注入 priority；
+	// 管理员策略仍可统一过滤或阻断该字段。
+	chatBody, err = s.applyOpenAIFastPolicyToBody(ctx, account, upstreamModel, chatBody)
+	if err != nil {
+		var blocked *OpenAIFastBlockedError
+		if errors.As(err, &blocked) {
+			MarkOpsClientBusinessLimited(c, OpsClientBusinessLimitedReasonLocalPolicyDenied)
+			writeAnthropicError(c, http.StatusForbidden, "forbidden_error", blocked.Message)
+		}
+		return nil, err
+	}
+	serviceTier = extractOpenAIServiceTierFromBody(chatBody)
 
 	logger.L().Debug("openai messages: forwarding via raw chat completions",
 		zap.Int64("account_id", account.ID),
@@ -96,7 +105,7 @@ func (s *OpenAIGatewayService) forwardAnthropicViaRawChatCompletions(
 		zap.Bool("stream", clientStream),
 	)
 
-	// 3. Build and send upstream request via the shared CC pipeline
+	// 4. Build and send upstream request via the shared CC pipeline
 	apiKey, targetURL, err := s.resolveCCFallbackTarget(account)
 	if err != nil {
 		return nil, err
@@ -107,7 +116,7 @@ func (s *OpenAIGatewayService) forwardAnthropicViaRawChatCompletions(
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	// 4. Handle error responses
+	// 5. Handle error responses
 	if resp.StatusCode >= 400 {
 		respBody, upstreamMsg := s.readOpenAIUpstreamError(resp)
 		if foErr := s.failoverOpenAIUpstreamHTTPError(ctx, c, account, resp, respBody, upstreamMsg, upstreamModel); foErr != nil {
@@ -118,7 +127,7 @@ func (s *OpenAIGatewayService) forwardAnthropicViaRawChatCompletions(
 		return s.handleAnthropicErrorResponse(resp, c, account, billingModel)
 	}
 
-	// 5. Convert response
+	// 6. Convert response
 	if clientStream {
 		return s.streamChatCompletionsAsAnthropic(c, resp, originalModel, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime)
 	}

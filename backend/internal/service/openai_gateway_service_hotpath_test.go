@@ -815,6 +815,53 @@ func TestExtractOpenAIReasoningEffortFromBody(t *testing.T) {
 	}
 }
 
+// TestApplyOpenAIReasoningEffortFromModelSuffixToResponsesBody 验证 Responses 请求会注入模型后缀档位且不覆盖显式配置。
+// 参数：t 为测试上下文。返回值：无。
+func TestApplyOpenAIReasoningEffortFromModelSuffixToResponsesBody(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.5","input":"hi"}`)
+	updated, err := applyOpenAIReasoningEffortFromModelSuffixToResponsesBody(body, "gpt-5.5-xhigh")
+	require.NoError(t, err)
+	require.Equal(t, "xhigh", gjson.GetBytes(updated, "reasoning.effort").String())
+	require.Equal(t, "auto", gjson.GetBytes(updated, "reasoning.summary").String())
+
+	noneBody, err := applyOpenAIReasoningEffortFromModelSuffixToResponsesBody(body, "gpt-5.5-none")
+	require.NoError(t, err)
+	require.Equal(t, "none", gjson.GetBytes(noneBody, "reasoning.effort").String())
+	require.False(t, gjson.GetBytes(noneBody, "reasoning.summary").Exists())
+
+	minimalBody, err := applyOpenAIReasoningEffortFromModelSuffixToResponsesBody(body, "gpt-5.5-minimal")
+	require.NoError(t, err)
+	require.Equal(t, "none", gjson.GetBytes(minimalBody, "reasoning.effort").String())
+	require.False(t, gjson.GetBytes(minimalBody, "reasoning.summary").Exists())
+
+	explicit := []byte(`{"model":"gpt-5.5","input":"hi","reasoning":{"effort":"low"}}`)
+	updated, err = applyOpenAIReasoningEffortFromModelSuffixToResponsesBody(explicit, "gpt-5.5-high")
+	require.NoError(t, err)
+	require.Equal(t, "low", gjson.GetBytes(updated, "reasoning.effort").String())
+}
+
+// TestApplyOpenAIReasoningEffortFromModelSuffixToChatBody 验证 Chat 请求保留模型后缀档位且不覆盖显式配置。
+// 参数：t 为测试上下文。返回值：无。
+func TestApplyOpenAIReasoningEffortFromModelSuffixToChatBody(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.5","messages":[]}`)
+	updated, err := applyOpenAIReasoningEffortFromModelSuffixToChatBody(body, "gpt-5.5-high")
+	require.NoError(t, err)
+	require.Equal(t, "high", gjson.GetBytes(updated, "reasoning_effort").String())
+
+	noneBody, err := applyOpenAIReasoningEffortFromModelSuffixToChatBody(body, "gpt-5.5-none")
+	require.NoError(t, err)
+	require.Equal(t, "none", gjson.GetBytes(noneBody, "reasoning_effort").String())
+
+	minimalBody, err := applyOpenAIReasoningEffortFromModelSuffixToChatBody(body, "gpt-5.5-minimal")
+	require.NoError(t, err)
+	require.Equal(t, "minimal", gjson.GetBytes(minimalBody, "reasoning_effort").String())
+
+	explicit := []byte(`{"model":"gpt-5.5","messages":[],"reasoning_effort":"medium"}`)
+	updated, err = applyOpenAIReasoningEffortFromModelSuffixToChatBody(explicit, "gpt-5.5-xhigh")
+	require.NoError(t, err)
+	require.Equal(t, "medium", gjson.GetBytes(updated, "reasoning_effort").String())
+}
+
 func TestGetOpenAIRequestBodyMap_ParseError(t *testing.T) {
 	_, err := getOpenAIRequestBodyMap(nil, []byte(`{invalid-json`))
 	require.Error(t, err)

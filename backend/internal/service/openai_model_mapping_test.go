@@ -95,6 +95,16 @@ func TestResolveOpenAIForwardModel(t *testing.T) {
 			expectedModel:      "gpt-5.5",
 		},
 		{
+			name: "normalizes reasoning suffix instead of group default",
+			account: &Account{
+				Platform:    PlatformOpenAI,
+				Credentials: map[string]any{},
+			},
+			requestedModel:     "gpt-5.5-high",
+			defaultMappedModel: "gpt-5.4",
+			expectedModel:      "gpt-5.5",
+		},
+		{
 			name: "preserves gpt-5.5-pro instead of group default",
 			account: &Account{
 				Credentials: map[string]any{},
@@ -311,6 +321,12 @@ func TestNormalizeOpenAIModelForUpstream(t *testing.T) {
 			account: &Account{Type: AccountTypeAPIKey},
 			model:   "gpt-4.1",
 			want:    "gpt-4.1",
+		},
+		{
+			name:    "apikey normalizes reasoning suffix",
+			account: &Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey},
+			model:   "gpt-5.5-xhigh",
+			want:    "gpt-5.5",
 		},
 	}
 

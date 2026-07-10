@@ -6,16 +6,23 @@ import "strings"
 // defaultMappedModel 只服务于 /v1/messages 的 Claude 系列显式调度映射，
 // 不作为普通 OpenAI 请求的未知模型兜底。
 func resolveOpenAIForwardModel(account *Account, requestedModel, defaultMappedModel string) string {
+	normalizedRequestedModel := NormalizeOpenAICompatRequestedModel(requestedModel)
+	if normalizedRequestedModel == "" {
+		normalizedRequestedModel = requestedModel
+	}
 	if account == nil {
 		if defaultMappedModel != "" && claudeMessagesDispatchFamily(requestedModel) != "" {
 			return defaultMappedModel
 		}
-		return requestedModel
+		return normalizedRequestedModel
 	}
 
 	mappedModel, matched := account.ResolveMappedModel(requestedModel)
 	if !matched && defaultMappedModel != "" && claudeMessagesDispatchFamily(requestedModel) != "" {
 		return defaultMappedModel
+	}
+	if !matched {
+		return normalizedRequestedModel
 	}
 	return mappedModel
 }

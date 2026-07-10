@@ -79,6 +79,44 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		body = sanitizedBody
 	}
 
+	// 模型名 reasoning 后缀：先注入 effort，再按账号类型剥上游 model。
+	// 透传路径也必须保证“剥后缀”与“写 effort”原子一致，避免只改 model 丢语义。
+	bodyModel := strings.TrimSpace(gjson.GetBytes(body, "model").String())
+	suffixSourceModel := strings.TrimSpace(reqModel)
+	if suffixSourceModel == "" {
+		suffixSourceModel = bodyModel
+	}
+	var suffixErr error
+	body, suffixErr = applyOpenAIReasoningEffortFromModelSuffixToResponsesBody(body, suffixSourceModel)
+	if suffixErr != nil {
+		return nil, suffixErr
+	}
+	modelForUpstream := bodyModel
+	if modelForUpstream == "" {
+		modelForUpstream = suffixSourceModel
+	}
+	upstreamNormalizedModel := modelForUpstream
+	if isOpenAIResponsesCompactPath(c) {
+		if normalizedModel := NormalizeOpenAICompatRequestedModel(modelForUpstream); normalizedModel != "" {
+			upstreamNormalizedModel = normalizedModel
+		}
+	} else {
+		upstreamNormalizedModel = normalizeOpenAIModelForUpstream(account, modelForUpstream)
+	}
+	if upstreamNormalizedModel != "" && bodyModel != "" && upstreamNormalizedModel != bodyModel {
+		nextBody, setErr := sjson.SetBytes(body, "model", upstreamNormalizedModel)
+		if setErr != nil {
+			return nil, fmt.Errorf("normalize passthrough upstream model: %w", setErr)
+		}
+		body = nextBody
+	}
+	// 重新提取 effort：可能刚从模型后缀注入，也可能 body 本就带 reasoning.effort。
+	mappedModel := account.GetMappedModel(reqModel)
+	if extractedEffort := extractOpenAIReasoningEffortFromBody(body, upstreamNormalizedModel, mappedModel, suffixSourceModel, reqModel); extractedEffort != nil {
+		reasoningEffort = extractedEffort
+	}
+	reasoningEffort = ApplyThinkingEnabledFallback(reasoningEffort, body, mappedModel)
+
 	// Apply OpenAI fast policy to the passthrough body (filter/block by service_tier).
 	// 统一使用 upstream 视角的 model：透传路径下 body 已经过 compact 映射 +
 	// OAuth normalize，body 中的 model 字段即上游真正会看到的 slug。

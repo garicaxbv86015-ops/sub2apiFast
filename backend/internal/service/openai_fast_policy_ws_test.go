@@ -168,6 +168,19 @@ func TestWSResponseCreate_NoServiceTierUntouched(t *testing.T) {
 	require.Equal(t, string(frame), string(updated), "no service_tier present must result in zero mutation")
 }
 
+// TestWSResponseCreate_AccountFastModeInjectsPriority 验证账号级 Fast 模式会
+// 对 Realtime response.create 帧补充 service_tier=priority。
+func TestWSResponseCreate_AccountFastModeInjectsPriority(t *testing.T) {
+	svc := newOpenAIGatewayServiceWithSettings(t, DefaultOpenAIFastPolicySettings())
+	account := &Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Extra: map[string]any{"openai_fast_mode": true}}
+
+	frame := []byte(`{"type":"response.create","model":"gpt-5.5","input":[]}`)
+	updated, blocked, err := svc.applyOpenAIFastPolicyToWSResponseCreate(context.Background(), account, "gpt-5.5", frame)
+	require.NoError(t, err)
+	require.Nil(t, blocked)
+	require.Equal(t, OpenAIFastTierPriority, gjson.GetBytes(updated, "service_tier").String())
+}
+
 func TestWSResponseCreate_NonResponseCreateFrameUntouched(t *testing.T) {
 	settings := &OpenAIFastPolicySettings{
 		Rules: []OpenAIFastPolicyRule{{

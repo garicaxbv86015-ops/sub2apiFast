@@ -60,6 +60,10 @@ func (s *OpenAIGatewayService) forwardResponsesViaRawChatCompletions(
 	if err != nil {
 		return nil, fmt.Errorf("marshal chat completions fallback request: %w", err)
 	}
+	chatBody, err = applyOpenAIReasoningEffortFromModelSuffixToChatBody(chatBody, originalModel)
+	if err != nil {
+		return nil, err
+	}
 	chatBody, err = s.applyOpenAIFastPolicyToBody(ctx, account, upstreamModel, chatBody)
 	if err != nil {
 		var blocked *OpenAIFastBlockedError
@@ -68,9 +72,8 @@ func (s *OpenAIGatewayService) forwardResponsesViaRawChatCompletions(
 		}
 		return nil, err
 	}
-	if serviceTier == nil {
-		serviceTier = extractOpenAIServiceTierFromBody(chatBody)
-	}
+	serviceTier = extractOpenAIServiceTierFromBody(chatBody)
+	reasoningEffort = ApplyThinkingEnabledFallback(extractOpenAIReasoningEffortFromBody(chatBody, upstreamModel, billingModel, originalModel), chatBody, billingModel)
 
 	logger.L().Debug("openai responses: forwarding via raw chat completions",
 		zap.Int64("account_id", account.ID),

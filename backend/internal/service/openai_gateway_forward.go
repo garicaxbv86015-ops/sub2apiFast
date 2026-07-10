@@ -111,8 +111,9 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			}
 		}
 		// 透传分支只需要轻量提取字段，避免热路径全量 Unmarshal。
+		// originalModel/reqModel 保留后缀，供 effort 推导；mappedModel 供国产 fallback 判定。
 		mappedModel := account.GetMappedModel(reqModel)
-		reasoningEffort := extractOpenAIReasoningEffortFromBody(body, mappedModel)
+		reasoningEffort := extractOpenAIReasoningEffortFromBody(body, mappedModel, reqModel)
 		// 国产模型默认 effort 补充：也要用 mappedModel 判定是否是 passback-required 上游。
 		reasoningEffort = ApplyThinkingEnabledFallback(reasoningEffort, body, mappedModel)
 		return s.forwardOpenAIPassthrough(ctx, c, account, originalBody, reqModel, reasoningEffort, reqStream, startTime)
@@ -230,6 +231,16 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			logger.LegacyPrintf("service.openai_gateway", "[OpenAI] Upstream model resolved: %s -> %s (account: %s, type: %s, isCodexCLI: %v)", modelForNormalize, upstreamModel, account.Name, account.Type, isCodexCLI)
 			reqModel = upstreamModel
 			markPatchSet("model", upstreamModel)
+		}
+	}
+	// 2. 模型名 reasoning 后缀：剥 model 后必须把 effort 写回 body，避免只改 model 丢语义。
+	// 使用 originalModel（映射/归一化前）推导；body 已显式携带 reasoning.effort 时不覆盖。
+	if !gjson.GetBytes(body, "reasoning.effort").Exists() {
+		if effort := deriveOpenAIResponsesReasoningEffortFromModel(originalModel); effort != "" {
+			markPatchSet("reasoning.effort", effort)
+			if effort != "none" && !gjson.GetBytes(body, "reasoning.summary").Exists() {
+				markPatchSet("reasoning.summary", "auto")
+			}
 		}
 	}
 	if strings.TrimSpace(gjson.GetBytes(body, "reasoning.effort").String()) == "minimal" {
@@ -391,30 +402,16 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		}
 	}
 
-	if rawTier := requestView.ServiceTier; rawTier != "" {
-		if normTier := normalizedOpenAIServiceTierValue(rawTier); normTier != "" {
-			action, errMsg := s.evaluateOpenAIFastPolicy(ctx, account, upstreamModel, normTier)
-			switch action {
-			case BetaPolicyActionBlock:
-				msg := errMsg
-				if msg == "" {
-					msg = fmt.Sprintf("openai service_tier=%s is not allowed for model %s", normTier, upstreamModel)
-				}
-				blocked := &OpenAIFastBlockedError{Message: msg}
-				writeOpenAIFastPolicyBlockedResponse(c, blocked)
-				return nil, blocked
-			case BetaPolicyActionFilter:
-				markPatchDelete("service_tier")
-			case OpenAIFastPolicyActionForcePriority:
-				if rawTier != OpenAIFastTierPriority {
-					markPatchSet("service_tier", OpenAIFastTierPriority)
-				}
-			default:
-				if normTier != rawTier {
-					markPatchSet("service_tier", normTier)
-				}
-			}
-		}
+	// 1. 账号级 Fast 模式 + 管理员 fast policy：统一决策后仅做 patch 应用。
+	switch mut := s.decideOpenAIFastPolicyTierMutation(ctx, account, upstreamModel, requestView.ServiceTier); mut.kind {
+	case openAIFastTierMutationBlock:
+		blocked := &OpenAIFastBlockedError{Message: mut.blockMsg}
+		writeOpenAIFastPolicyBlockedResponse(c, blocked)
+		return nil, blocked
+	case openAIFastTierMutationDelete:
+		markPatchDelete("service_tier")
+	case openAIFastTierMutationSet:
+		markPatchSet("service_tier", mut.value)
 	}
 
 	if bodyModified {

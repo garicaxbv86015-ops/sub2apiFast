@@ -343,6 +343,92 @@ func deriveOpenAIReasoningEffortFromModelCandidates(models []string) string {
 	return ""
 }
 
+// deriveOpenAIRequestReasoningEffortFromModel 返回应写入上游请求的模型后缀推理档位。
+// 参数：model 为客户端原始模型名。返回值：规范化后的请求档位；无法识别时返回空字符串。
+func deriveOpenAIRequestReasoningEffortFromModel(model string) string {
+	modelID := lastOpenAIModelSegment(model)
+	if modelID == "" {
+		return ""
+	}
+
+	parts := strings.FieldsFunc(strings.ToLower(modelID), func(r rune) bool {
+		switch r {
+		case '-', '_', ' ':
+			return true
+		default:
+			return false
+		}
+	})
+	if len(parts) == 0 {
+		return ""
+	}
+
+	suffix := strings.NewReplacer("-", "", "_", "", " ", "").Replace(parts[len(parts)-1])
+	switch suffix {
+	case "none", "minimal":
+		return suffix
+	default:
+		return normalizeOpenAIReasoningEffortForModel(suffix, modelID)
+	}
+}
+
+// deriveOpenAIResponsesReasoningEffortFromModel 返回 Responses API 接受的模型后缀推理档位。
+// 参数：model 为客户端原始模型名。返回值：Responses 档位；minimal 会按现有兼容规则收敛为 none。
+func deriveOpenAIResponsesReasoningEffortFromModel(model string) string {
+	effort := deriveOpenAIRequestReasoningEffortFromModel(model)
+	if effort == "minimal" {
+		return "none"
+	}
+	return effort
+}
+
+// applyOpenAIReasoningEffortFromModelSuffixToResponsesBody 根据请求模型后缀补充 Responses reasoning.effort。
+// 参数 body 表示即将发往上游的 Responses JSON 请求体，requestedModel 表示客户端原始请求模型。
+// 返回值为补充后的 JSON 请求体；当请求体已显式设置 reasoning.effort 或模型后缀无法推导 effort 时，原样返回。
+func applyOpenAIReasoningEffortFromModelSuffixToResponsesBody(body []byte, requestedModel string) ([]byte, error) {
+	if gjson.GetBytes(body, "reasoning.effort").Exists() {
+		return body, nil
+	}
+
+	effort := deriveOpenAIResponsesReasoningEffortFromModel(requestedModel)
+	if effort == "" {
+		return body, nil
+	}
+
+	updated, err := sjson.SetBytes(body, "reasoning.effort", effort)
+	if err != nil {
+		return nil, fmt.Errorf("apply model suffix reasoning effort to responses body: %w", err)
+	}
+	// 1. 启用推理时同步请求摘要；none 档位不附带无意义的 summary 配置。
+	if effort != "none" && !gjson.GetBytes(updated, "reasoning.summary").Exists() {
+		updated, err = sjson.SetBytes(updated, "reasoning.summary", "auto")
+		if err != nil {
+			return nil, fmt.Errorf("apply model suffix reasoning summary to responses body: %w", err)
+		}
+	}
+	return updated, nil
+}
+
+// applyOpenAIReasoningEffortFromModelSuffixToChatBody 根据请求模型后缀补充 Chat Completions reasoning_effort。
+// 参数 body 表示即将发往上游的 Chat Completions JSON 请求体，requestedModel 表示客户端原始请求模型。
+// 返回值为补充后的 JSON 请求体；当请求体已显式设置 reasoning_effort/reasoning.effort 或模型后缀无法推导 effort 时，原样返回。
+func applyOpenAIReasoningEffortFromModelSuffixToChatBody(body []byte, requestedModel string) ([]byte, error) {
+	if gjson.GetBytes(body, "reasoning_effort").Exists() || gjson.GetBytes(body, "reasoning.effort").Exists() {
+		return body, nil
+	}
+
+	effort := deriveOpenAIRequestReasoningEffortFromModel(requestedModel)
+	if effort == "" {
+		return body, nil
+	}
+
+	updated, err := sjson.SetBytes(body, "reasoning_effort", effort)
+	if err != nil {
+		return nil, fmt.Errorf("apply model suffix reasoning effort to chat body: %w", err)
+	}
+	return updated, nil
+}
+
 type openAIRequestView struct {
 	body               []byte
 	Model              string
@@ -785,29 +871,60 @@ func openAIFastPolicySettingsFromContext(ctx context.Context) *OpenAIFastPolicyS
 	return nil
 }
 
-// applyOpenAIFastPolicyToBody applies the OpenAI fast policy to a raw request
-// body. When action=filter it removes the service_tier field; when
-// action=block it returns (body, *OpenAIFastBlockedError). On pass it
-// normalizes the service_tier value (e.g. client alias "fast" → "priority").
-// action=force_priority rewrites any matched known tier to "priority".
-//
-// Rationale for normalize-on-pass: chat-completions / messages 入口在调用本
-// 函数之前已经通过 normalizeResponsesBodyServiceTier 把 service_tier 归一化
-// 到了上游可识别值；passthrough（OpenAI 自动透传） / native /responses 等
-// 入口没有这一前置步骤，pass 路径下若不在此处归一化，"fast" 就会被原样
-// 透传到 OpenAI 上游导致 400/拒绝。把归一化收敛到本函数，所有入口行为一致。
-func (s *OpenAIGatewayService) applyOpenAIFastPolicyToBody(ctx context.Context, account *Account, model string, body []byte) ([]byte, error) {
-	if len(body) == 0 {
-		return body, nil
+// openAIFastTierMutationKind 表示对 service_tier 字段的改写类型。
+type openAIFastTierMutationKind int
+
+const (
+	// openAIFastTierMutationNone 表示无需改写 service_tier。
+	openAIFastTierMutationNone openAIFastTierMutationKind = iota
+	// openAIFastTierMutationSet 表示写入/覆盖 service_tier。
+	openAIFastTierMutationSet
+	// openAIFastTierMutationDelete 表示删除 service_tier。
+	openAIFastTierMutationDelete
+	// openAIFastTierMutationBlock 表示策略阻断请求。
+	openAIFastTierMutationBlock
+)
+
+// openAIFastTierMutation 是账号 Fast 模式 + admin fast policy 的统一决策结果。
+// HTTP body / WS frame / Forward patch 只负责应用该决策，不再各自复制策略分支。
+type openAIFastTierMutation struct {
+	kind     openAIFastTierMutationKind
+	value    string
+	blockMsg string
+}
+
+// resolveOpenAIAccountFastRawTier 解析用于 fast policy 评估的原始 service_tier。
+// 参数：account 为当前账号，rawTier 为客户端原始 tier。
+// 返回值：effectiveTier 为评估用 tier；accountFast 表示是否由账号 Fast 模式收敛；
+// skip 为 true 时表示无 tier 可评估（未开账号 Fast 且客户端未传）。
+func resolveOpenAIAccountFastRawTier(account *Account, rawTier string) (effectiveTier string, accountFast bool, skip bool) {
+	if account.IsOpenAIFastModeEnabled() {
+		return OpenAIFastTierPriority, true, false
 	}
-	rawTier := gjson.GetBytes(body, "service_tier").String()
-	if rawTier == "" {
-		return body, nil
+	if strings.TrimSpace(rawTier) == "" {
+		return "", false, true
 	}
-	normTier := normalizedOpenAIServiceTierValue(rawTier)
+	return rawTier, false, false
+}
+
+// decideOpenAIFastPolicyTierMutation 统一计算 service_tier 的策略改写结果。
+// 参数：ctx 为请求上下文，account 为当前账号，model 为上游模型名，rawTier 为客户端原始 tier。
+// 返回值：对 body/frame/patch 统一生效的 mutation（set/delete/block/noop）。
+func (s *OpenAIGatewayService) decideOpenAIFastPolicyTierMutation(
+	ctx context.Context,
+	account *Account,
+	model string,
+	rawTier string,
+) openAIFastTierMutation {
+	effectiveTier, accountFast, skip := resolveOpenAIAccountFastRawTier(account, rawTier)
+	if skip {
+		return openAIFastTierMutation{kind: openAIFastTierMutationNone}
+	}
+	normTier := normalizedOpenAIServiceTierValue(effectiveTier)
 	if normTier == "" {
-		return body, nil
+		return openAIFastTierMutation{kind: openAIFastTierMutationNone}
 	}
+
 	action, errMsg := s.evaluateOpenAIFastPolicy(ctx, account, model, normTier)
 	switch action {
 	case BetaPolicyActionBlock:
@@ -815,30 +932,74 @@ func (s *OpenAIGatewayService) applyOpenAIFastPolicyToBody(ctx context.Context, 
 		if msg == "" {
 			msg = fmt.Sprintf("openai service_tier=%s is not allowed for model %s", normTier, model)
 		}
-		return body, &OpenAIFastBlockedError{Message: msg}
+		return openAIFastTierMutation{kind: openAIFastTierMutationBlock, blockMsg: msg}
 	case BetaPolicyActionFilter:
+		return openAIFastTierMutation{kind: openAIFastTierMutationDelete}
+	case OpenAIFastPolicyActionForcePriority:
+		return openAIFastTierMutation{kind: openAIFastTierMutationSet, value: OpenAIFastTierPriority}
+	default:
+		// pass：账号 Fast 或别名归一化时需要写回规范值（如 "fast" → "priority"）。
+		if !accountFast && normTier == effectiveTier {
+			return openAIFastTierMutation{kind: openAIFastTierMutationNone}
+		}
+		return openAIFastTierMutation{kind: openAIFastTierMutationSet, value: normTier}
+	}
+}
+
+// applyOpenAIFastTierMutationToJSON 将统一的 service_tier 决策应用到 JSON 载荷。
+// 参数：body 为原始 JSON，mut 为决策结果，errContext 用于错误信息（如 body/ws frame）。
+// 返回值：改写后的 JSON、可选阻断错误，以及 JSON 修改错误。
+func applyOpenAIFastTierMutationToJSON(body []byte, mut openAIFastTierMutation, errContext string) ([]byte, *OpenAIFastBlockedError, error) {
+	switch mut.kind {
+	case openAIFastTierMutationNone:
+		return body, nil, nil
+	case openAIFastTierMutationBlock:
+		return body, &OpenAIFastBlockedError{Message: mut.blockMsg}, nil
+	case openAIFastTierMutationDelete:
 		trimmed, err := sjson.DeleteBytes(body, "service_tier")
 		if err != nil {
-			return body, fmt.Errorf("strip service_tier from body: %w", err)
+			return body, nil, fmt.Errorf("strip service_tier from %s: %w", errContext, err)
 		}
-		return trimmed, nil
-	case OpenAIFastPolicyActionForcePriority:
-		updated, err := sjson.SetBytes(body, "service_tier", OpenAIFastTierPriority)
+		return trimmed, nil, nil
+	case openAIFastTierMutationSet:
+		updated, err := sjson.SetBytes(body, "service_tier", mut.value)
 		if err != nil {
-			return body, fmt.Errorf("force service_tier priority on body: %w", err)
+			return body, nil, fmt.Errorf("set service_tier on %s: %w", errContext, err)
 		}
-		return updated, nil
+		return updated, nil, nil
 	default:
-		// pass：把别名（如 "fast"）写回为规范值（"priority"）。
-		if normTier == rawTier {
-			return body, nil
-		}
-		updated, err := sjson.SetBytes(body, "service_tier", normTier)
-		if err != nil {
-			return body, fmt.Errorf("normalize service_tier on pass: %w", err)
-		}
-		return updated, nil
+		return body, nil, nil
 	}
+}
+
+// applyOpenAIFastPolicyToBody applies the OpenAI fast policy to a raw request
+// body. When account fast mode is enabled it injects or rewrites service_tier
+// to "priority" before evaluating admin policy. When action=filter it removes
+// the service_tier field; when action=block it returns (body,
+// *OpenAIFastBlockedError). On pass it normalizes the service_tier value
+// (e.g. client alias "fast" → "priority"). action=force_priority rewrites any
+// matched known tier to "priority".
+//
+// Rationale for normalize-on-pass: chat-completions / messages 入口在调用本
+// 函数之前已经通过 normalizeResponsesBodyServiceTier 把 service_tier 归一化
+// 到了上游可识别值；passthrough（OpenAI 自动透传） / native /responses 等
+// 入口没有这一前置步骤，pass 路径下若不在此处归一化，"fast" 就会被原样
+// 透传到 OpenAI 上游导致 400/拒绝。把归一化收敛到本函数，所有入口行为一致。
+// 参数：ctx 为请求上下文，account 为当前上游账号，model 为上游模型名，body 为原始 JSON 请求体。
+// 返回值：返回应用策略后的请求体；当策略阻断或 JSON 修改失败时返回错误。
+func (s *OpenAIGatewayService) applyOpenAIFastPolicyToBody(ctx context.Context, account *Account, model string, body []byte) ([]byte, error) {
+	if len(body) == 0 {
+		return body, nil
+	}
+	mut := s.decideOpenAIFastPolicyTierMutation(ctx, account, model, gjson.GetBytes(body, "service_tier").String())
+	updated, blocked, err := applyOpenAIFastTierMutationToJSON(body, mut, "body")
+	if blocked != nil {
+		return body, blocked
+	}
+	if err != nil {
+		return body, err
+	}
+	return updated, nil
 }
 
 // writeOpenAIFastPolicyBlockedResponse writes a 403 JSON response for a
@@ -869,6 +1030,7 @@ func writeOpenAIFastPolicyBlockedResponse(c *gin.Context, err *OpenAIFastBlocked
 // applyOpenAIFastPolicyToBody contract but operates on a Realtime/Responses
 // WS payload:
 //
+//   - account fast mode: injects or rewrites top-level service_tier to "priority"
 //   - pass: keeps service_tier, normalizing aliases such as "fast" to "priority"
 //   - filter: returns a copy with top-level service_tier removed
 //   - force_priority: keeps service_tier and rewrites it to "priority"
@@ -889,6 +1051,8 @@ func writeOpenAIFastPolicyBlockedResponse(c *gin.Context, err *OpenAIFastBlocked
 //
 // The caller is responsible for choosing the upstream model passed in —
 // this helper does not re-derive it.
+// 参数：ctx 为请求上下文，account 为当前上游账号，model 为上游模型名，frame 为客户端 WS 帧。
+// 返回值：返回应用策略后的帧、可选阻断错误以及 JSON 修改错误。
 func (s *OpenAIGatewayService) applyOpenAIFastPolicyToWSResponseCreate(
 	ctx context.Context,
 	account *Account,
@@ -911,44 +1075,8 @@ func (s *OpenAIGatewayService) applyOpenAIFastPolicyToWSResponseCreate(
 	if frameType != "response.create" {
 		return frame, nil, nil
 	}
-	rawTier := gjson.GetBytes(frame, "service_tier").String()
-	if rawTier == "" {
-		return frame, nil, nil
-	}
-	normTier := normalizedOpenAIServiceTierValue(rawTier)
-	if normTier == "" {
-		return frame, nil, nil
-	}
-	action, errMsg := s.evaluateOpenAIFastPolicy(ctx, account, model, normTier)
-	switch action {
-	case BetaPolicyActionBlock:
-		msg := errMsg
-		if msg == "" {
-			msg = fmt.Sprintf("openai service_tier=%s is not allowed for model %s", normTier, model)
-		}
-		return frame, &OpenAIFastBlockedError{Message: msg}, nil
-	case BetaPolicyActionFilter:
-		trimmed, err := sjson.DeleteBytes(frame, "service_tier")
-		if err != nil {
-			return frame, nil, fmt.Errorf("strip service_tier from ws frame: %w", err)
-		}
-		return trimmed, nil, nil
-	case OpenAIFastPolicyActionForcePriority:
-		updated, err := sjson.SetBytes(frame, "service_tier", OpenAIFastTierPriority)
-		if err != nil {
-			return frame, nil, fmt.Errorf("force service_tier priority in ws frame: %w", err)
-		}
-		return updated, nil, nil
-	default:
-		if normTier == rawTier {
-			return frame, nil, nil
-		}
-		updated, err := sjson.SetBytes(frame, "service_tier", normTier)
-		if err != nil {
-			return frame, nil, fmt.Errorf("normalize service_tier in ws frame: %w", err)
-		}
-		return updated, nil, nil
-	}
+	mut := s.decideOpenAIFastPolicyTierMutation(ctx, account, model, gjson.GetBytes(frame, "service_tier").String())
+	return applyOpenAIFastTierMutationToJSON(frame, mut, "ws frame")
 }
 
 // newOpenAIFastPolicyWSEventID returns a Realtime-style event_id for a

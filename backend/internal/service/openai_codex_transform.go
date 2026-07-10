@@ -1010,11 +1010,17 @@ func normalizeOpenAIResponsesImageOnlyModel(reqBody map[string]any) bool {
 	return modified
 }
 
+// normalizeOpenAIModelForUpstream 返回实际发送到 OpenAI 上游的模型名。
+// 参数：account 为本次使用的账号，model 为调度/映射后的模型名。返回值：去除兼容后缀并按账号类型规范化后的上游模型名。
 func normalizeOpenAIModelForUpstream(account *Account, model string) string {
+	model = strings.TrimSpace(model)
+	if normalized := NormalizeOpenAICompatRequestedModel(model); normalized != "" {
+		model = normalized
+	}
 	if account == nil || account.Type == AccountTypeOAuth {
 		return normalizeCodexModel(model)
 	}
-	return strings.TrimSpace(model)
+	return model
 }
 
 func SupportsVerbosity(model string) bool {

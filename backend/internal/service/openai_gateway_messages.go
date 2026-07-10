@@ -251,6 +251,8 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		}
 		responsesBody = patchedBody
 	}
+	finalServiceTier := extractOpenAIServiceTierFromBody(responsesBody)
+	finalReasoningEffort := extractOpenAIReasoningEffortFromBody(responsesBody, upstreamModel, billingModel, originalModel)
 
 	// 5. Get access token
 	token, _, err := s.GetAccessToken(ctx, account)
@@ -375,14 +377,8 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		if promptCacheKey != "" && anthropicDigestChain != "" {
 			s.bindOpenAICompatAnthropicDigestPromptCacheKey(account, apiKeyID, anthropicDigestChain, promptCacheKey, anthropicMatchedDigestChain)
 		}
-		if responsesReq.ServiceTier != "" {
-			st := responsesReq.ServiceTier
-			result.ServiceTier = &st
-		}
-		if responsesReq.Reasoning != nil && responsesReq.Reasoning.Effort != "" {
-			re := responsesReq.Reasoning.Effort
-			result.ReasoningEffort = &re
-		}
+		result.ServiceTier = finalServiceTier
+		result.ReasoningEffort = finalReasoningEffort
 	}
 
 	// Extract and save Codex usage snapshot from response headers (for OAuth accounts).

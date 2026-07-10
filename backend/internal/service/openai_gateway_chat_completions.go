@@ -164,6 +164,10 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 			return nil, fmt.Errorf("marshal responses request: %w", err)
 		}
 	}
+	responsesBody, err = applyOpenAIReasoningEffortFromModelSuffixToResponsesBody(responsesBody, originalModel)
+	if err != nil {
+		return nil, err
+	}
 
 	logFields := []zap.Field{
 		zap.Int64("account_id", account.ID),
@@ -233,6 +237,8 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 		return nil, policyErr
 	}
 	responsesBody = updatedBody
+	finalServiceTier := extractOpenAIServiceTierFromBody(responsesBody)
+	finalReasoningEffort := extractOpenAIReasoningEffortFromBody(responsesBody, upstreamModel, billingModel, originalModel)
 
 	// 5. Get access token
 	token, _, err := s.GetAccessToken(ctx, account)
@@ -303,14 +309,8 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 
 	// Propagate ServiceTier and ReasoningEffort to result for billing
 	if handleErr == nil && result != nil {
-		if responsesReq.ServiceTier != "" {
-			st := responsesReq.ServiceTier
-			result.ServiceTier = &st
-		}
-		if responsesReq.Reasoning != nil && responsesReq.Reasoning.Effort != "" {
-			re := responsesReq.Reasoning.Effort
-			result.ReasoningEffort = &re
-		}
+		result.ServiceTier = finalServiceTier
+		result.ReasoningEffort = finalReasoningEffort
 	}
 
 	// Extract and save Codex usage snapshot from response headers (for OAuth accounts).

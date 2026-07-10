@@ -196,6 +196,52 @@ func TestApplyOpenAIFastPolicyToBody_DefaultPassesPriorityAndFast(t *testing.T) 
 	require.Equal(t, string(body), string(updated))
 }
 
+// TestApplyOpenAIFastPolicyToBody_AccountFastModeInjectsPriority 验证账号级
+// Fast 模式会在客户端未传 service_tier 时补充 priority。
+func TestApplyOpenAIFastPolicyToBody_AccountFastModeInjectsPriority(t *testing.T) {
+	svc := newOpenAIGatewayServiceWithSettings(t, DefaultOpenAIFastPolicySettings())
+	account := &Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Extra: map[string]any{"openai_fast_mode": true}}
+
+	body := []byte(`{"model":"gpt-5.5","messages":[]}`)
+	updated, err := svc.applyOpenAIFastPolicyToBody(context.Background(), account, "gpt-5.5", body)
+	require.NoError(t, err)
+	require.Equal(t, OpenAIFastTierPriority, gjson.GetBytes(updated, "service_tier").String())
+}
+
+// TestApplyOpenAIFastPolicyToBody_AccountFastModeOverridesClientTier 验证账号级
+// Fast 模式优先于客户端传入的非 Fast service_tier。
+func TestApplyOpenAIFastPolicyToBody_AccountFastModeOverridesClientTier(t *testing.T) {
+	svc := newOpenAIGatewayServiceWithSettings(t, DefaultOpenAIFastPolicySettings())
+	account := &Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Extra: map[string]any{"openai_fast_mode": true}}
+
+	body := []byte(`{"model":"gpt-5.5","service_tier":"flex"}`)
+	updated, err := svc.applyOpenAIFastPolicyToBody(context.Background(), account, "gpt-5.5", body)
+	require.NoError(t, err)
+	require.Equal(t, OpenAIFastTierPriority, gjson.GetBytes(updated, "service_tier").String())
+}
+
+// TestDecideOpenAIFastPolicyTierMutation_AccountFastMode 验证 HTTP/WS/Forward
+// 共用的 service_tier 决策对账号 Fast 模式的行为一致。
+func TestDecideOpenAIFastPolicyTierMutation_AccountFastMode(t *testing.T) {
+	svc := newOpenAIGatewayServiceWithSettings(t, DefaultOpenAIFastPolicySettings())
+	account := &Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Extra: map[string]any{"openai_fast_mode": true}}
+
+	// 客户端未传 tier → 注入 priority
+	mut := svc.decideOpenAIFastPolicyTierMutation(context.Background(), account, "gpt-5.5", "")
+	require.Equal(t, openAIFastTierMutationSet, mut.kind)
+	require.Equal(t, OpenAIFastTierPriority, mut.value)
+
+	// 客户端 flex → 收敛为 priority
+	mut = svc.decideOpenAIFastPolicyTierMutation(context.Background(), account, "gpt-5.5", "flex")
+	require.Equal(t, openAIFastTierMutationSet, mut.kind)
+	require.Equal(t, OpenAIFastTierPriority, mut.value)
+
+	// 未开账号 Fast 且无 tier → noop
+	plain := &Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey}
+	mut = svc.decideOpenAIFastPolicyTierMutation(context.Background(), plain, "gpt-5.5", "")
+	require.Equal(t, openAIFastTierMutationNone, mut.kind)
+}
+
 func TestApplyOpenAIFastPolicyToBody_ExplicitFilterRemovesField(t *testing.T) {
 	svc := newOpenAIGatewayServiceWithSettings(t, openAIFastFilterPriorityPolicy())
 	account := &Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey}

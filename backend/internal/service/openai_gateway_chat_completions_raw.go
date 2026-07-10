@@ -85,6 +85,10 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 	if upstreamModel != originalModel {
 		upstreamBody = ReplaceModelInBody(body, upstreamModel)
 	}
+	upstreamBody, err := applyOpenAIReasoningEffortFromModelSuffixToChatBody(upstreamBody, originalModel)
+	if err != nil {
+		return nil, err
+	}
 	if normalizedBody, normalized := NormalizeGLMOpenAIReasoningEffort(upstreamBody, upstreamModel); normalized {
 		upstreamBody = normalizedBody
 	}
@@ -127,6 +131,8 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 		}
 	}
 
+	reasoningEffort = ApplyThinkingEnabledFallback(extractOpenAIReasoningEffortFromBody(upstreamBody, upstreamModel, billingModel, originalModel), upstreamBody, billingModel)
+	serviceTier = extractOpenAIServiceTierFromBody(upstreamBody)
 	if clientStream {
 		var usageErr error
 		upstreamBody, usageErr = ensureOpenAIChatStreamUsage(upstreamBody)

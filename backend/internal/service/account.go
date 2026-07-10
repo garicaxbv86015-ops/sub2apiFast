@@ -710,10 +710,19 @@ func mappingHasWildcardForModel(mapping map[string]string, model string) bool {
 	return false
 }
 
+// normalizeRequestedModelForLookup 返回用于账号模型映射查找的规范模型名。
+// 参数：platform 为账号平台，requestedModel 为客户端请求模型。返回值：可用于匹配 model_mapping 的模型名。
 func normalizeRequestedModelForLookup(platform, requestedModel string) string {
 	trimmed := strings.TrimSpace(requestedModel)
 	if trimmed == "" {
 		return ""
+	}
+	if platform == PlatformOpenAI {
+		normalized := NormalizeOpenAICompatRequestedModel(trimmed)
+		if normalized != "" {
+			return normalized
+		}
+		return trimmed
 	}
 	if platform != PlatformGemini && platform != PlatformAntigravity {
 		return trimmed
@@ -1515,6 +1524,16 @@ func (a *Account) IsOpenAIPassthroughEnabled() bool {
 		return enabled
 	}
 	return false
+}
+
+// IsOpenAIFastModeEnabled 返回 OpenAI 账号是否启用账号级 Fast 模式。
+// 参数：无。返回值：true 表示请求会默认使用 service_tier=priority。
+func (a *Account) IsOpenAIFastModeEnabled() bool {
+	if a == nil || !a.IsOpenAI() || a.Extra == nil {
+		return false
+	}
+	enabled, ok := a.Extra["openai_fast_mode"].(bool)
+	return ok && enabled
 }
 
 // IsOpenAIResponsesWebSocketV2Enabled 返回 OpenAI 账号是否开启 Responses WebSocket v2。
