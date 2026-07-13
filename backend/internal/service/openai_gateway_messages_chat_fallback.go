@@ -110,7 +110,7 @@ func (s *OpenAIGatewayService) forwardAnthropicViaRawChatCompletions(
 	if err != nil {
 		return nil, err
 	}
-	resp, err := s.sendCCUpstreamRequest(ctx, c, account, targetURL, chatBody, clientStream, apiKey, account.GetOpenAIUserAgent())
+	resp, err := s.sendCCUpstreamRequest(ctx, c, account, targetURL, chatBody, clientStream, apiKey, account.GetOpenAIUserAgent(), "")
 	if err != nil {
 		return nil, err
 	}
@@ -149,7 +149,7 @@ func (s *OpenAIGatewayService) bufferChatCompletionsAsAnthropic(
 	if err != nil {
 		return nil, err
 	}
-	responsesResp := apicompat.ChatCompletionsResponseToResponses(ccResp, originalModel)
+	responsesResp := apicompat.ChatCompletionsResponseToResponses(ccResp, originalModel, nil, false, nil)
 
 	anthropicResp := apicompat.ResponsesToAnthropic(responsesResp, originalModel)
 
