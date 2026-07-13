@@ -271,20 +271,35 @@ func (s *OpenAIGatewayService) BindGrokMediaVideoRequestAccount(ctx context.Cont
 func (e GrokMediaEndpoint) upstreamURL(baseURL, requestID string) (string, error) {
 	switch e {
 	case GrokMediaEndpointImagesGenerations:
-		return xai.BuildImagesGenerationsURL(baseURL)
+		return buildGrokAPIEndpointURL(baseURL, "images/generations")
 	case GrokMediaEndpointImagesEdits:
-		return xai.BuildImagesEditsURL(baseURL)
+		return buildGrokAPIEndpointURL(baseURL, "images/edits")
 	case GrokMediaEndpointVideosGenerations:
-		return xai.BuildVideosGenerationsURL(baseURL)
+		return buildGrokAPIEndpointURL(baseURL, "videos/generations")
 	case GrokMediaEndpointVideosEdits:
-		return xai.BuildVideosEditsURL(baseURL)
+		return buildGrokAPIEndpointURL(baseURL, "videos/edits")
 	case GrokMediaEndpointVideosExtensions:
-		return xai.BuildVideosExtensionsURL(baseURL)
+		return buildGrokAPIEndpointURL(baseURL, "videos/extensions")
 	case GrokMediaEndpointVideoStatus:
-		return xai.BuildVideoURL(baseURL, requestID)
+		return buildGrokAPIVideoURL(baseURL, requestID)
 	default:
 		return "", fmt.Errorf("unsupported grok media endpoint: %s", e)
 	}
+}
+
+// grokMediaUpstreamURL 构建经过服务安全配置校验的 Grok 媒体上游地址。
+// 参数 account 表示 Grok 账号，endpoint 表示媒体端点，requestID 表示视频状态查询请求 ID。
+// 返回值为完整上游地址，错误表示 Base URL 或端点参数无效。
+func (s *OpenAIGatewayService) grokMediaUpstreamURL(account *Account, endpoint GrokMediaEndpoint, requestID string) (string, error) {
+	baseURL := account.GetGrokBaseURL()
+	if account.Type == AccountTypeAPIKey && s != nil && s.cfg != nil {
+		var err error
+		baseURL, err = s.validateUpstreamBaseURL(baseURL)
+		if err != nil {
+			return "", err
+		}
+	}
+	return endpoint.upstreamURL(baseURL, requestID)
 }
 
 func (s *OpenAIGatewayService) ForwardGrokMedia(
@@ -308,7 +323,7 @@ func (s *OpenAIGatewayService) ForwardGrokMedia(
 	if err != nil {
 		return nil, err
 	}
-	targetURL, err := endpoint.upstreamURL(account.GetGrokBaseURL(), requestID)
+	targetURL, err := s.grokMediaUpstreamURL(account, endpoint, requestID)
 	if err != nil {
 		return nil, err
 	}

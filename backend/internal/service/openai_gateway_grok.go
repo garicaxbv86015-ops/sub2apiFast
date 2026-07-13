@@ -60,7 +60,7 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 
 	upstreamCtx, releaseUpstreamCtx := detachUpstreamContext(ctx)
 	defer releaseUpstreamCtx()
-	upstreamReq, err := buildGrokResponsesRequest(upstreamCtx, c, account, patchedBody, token, cacheIdentity)
+	upstreamReq, err := s.buildGrokResponsesRequest(upstreamCtx, c, account, patchedBody, token, cacheIdentity)
 	if err != nil {
 		return nil, err
 	}
@@ -539,7 +539,7 @@ func (s *OpenAIGatewayService) describeGrokComposerImage(
 	upstreamCtx, releaseUpstreamCtx := detachUpstreamContext(ctx)
 	// Image-description probes are auxiliary requests, not conversation turns.
 	// Do not bind them to the caller's Grok prompt-cache identity.
-	upstreamReq, err := buildGrokResponsesRequest(upstreamCtx, c, account, body, token, "")
+	upstreamReq, err := s.buildGrokResponsesRequest(upstreamCtx, c, account, body, token, "")
 	releaseUpstreamCtx()
 	if err != nil {
 		return "", OpenAIUsage{}, fmt.Errorf("build grok composer image bridge request: %w", err)
@@ -704,8 +704,33 @@ func addOpenAIUsage(dst *OpenAIUsage, usage OpenAIUsage) {
 	dst.ImageOutputTokens += usage.ImageOutputTokens
 }
 
+// buildGrokResponsesRequest 基于账号自身 Base URL 构建 Grok Responses 请求。
+// 参数 ctx 为请求上下文，c 为 Gin 上下文，account 为 Grok 账号，body 为请求体，token 为访问令牌，cacheIdentity 为缓存会话标识。
+// 返回值为可发送到上游的 HTTP 请求，错误表示 URL 或请求构造失败。
 func buildGrokResponsesRequest(ctx context.Context, c *gin.Context, account *Account, body []byte, token, cacheIdentity string) (*http.Request, error) {
-	targetURL, err := xai.BuildResponsesURL(account.GetGrokBaseURL())
+	return buildGrokResponsesRequestWithBaseURL(ctx, c, account.GetGrokBaseURL(), body, token, cacheIdentity)
+}
+
+// buildGrokResponsesRequest 构建经过服务安全配置校验的 Grok Responses 上游请求。
+// 参数 ctx 为请求上下文，c 为 Gin 上下文，account 为 Grok 账号，body 为请求体，token 为访问令牌，cacheIdentity 为缓存会话标识。
+// 返回值为可发送到上游的 HTTP 请求，错误表示 Base URL、请求体或请求构造失败。
+func (s *OpenAIGatewayService) buildGrokResponsesRequest(ctx context.Context, c *gin.Context, account *Account, body []byte, token, cacheIdentity string) (*http.Request, error) {
+	baseURL := account.GetGrokBaseURL()
+	if account.Type == AccountTypeAPIKey && s != nil && s.cfg != nil {
+		var err error
+		baseURL, err = s.validateUpstreamBaseURL(baseURL)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return buildGrokResponsesRequestWithBaseURL(ctx, c, baseURL, body, token, cacheIdentity)
+}
+
+// buildGrokResponsesRequestWithBaseURL 使用已解析的 Base URL 构建 Grok Responses 请求。
+// 参数 ctx 为请求上下文，c 为 Gin 上下文，baseURL 为已选定的 Grok Base URL，body 为请求体，token 为访问令牌，cacheIdentity 为缓存会话标识。
+// 返回值为可发送到上游的 HTTP 请求，错误表示 URL 或请求构造失败。
+func buildGrokResponsesRequestWithBaseURL(ctx context.Context, c *gin.Context, baseURL string, body []byte, token, cacheIdentity string) (*http.Request, error) {
+	targetURL, err := buildGrokAPIEndpointURL(baseURL, "responses")
 	if err != nil {
 		return nil, err
 	}
