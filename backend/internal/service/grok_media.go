@@ -290,8 +290,9 @@ func (e GrokMediaEndpoint) upstreamURL(baseURL, requestID string) (string, error
 // grokMediaUpstreamURL 构建经过服务安全配置校验的 Grok 媒体上游地址。
 // 参数 account 表示 Grok 账号，endpoint 表示媒体端点，requestID 表示视频状态查询请求 ID。
 // 返回值为完整上游地址，错误表示 Base URL 或端点参数无效。
+// 使用 GetGrokMediaBaseURL 以区分媒体流量与文本 CLI 代理；API Key 账号再经 allowlist 校验。
 func (s *OpenAIGatewayService) grokMediaUpstreamURL(account *Account, endpoint GrokMediaEndpoint, requestID string) (string, error) {
-	baseURL := account.GetGrokBaseURL()
+	baseURL := account.GetGrokMediaBaseURL()
 	if account.Type == AccountTypeAPIKey && s != nil && s.cfg != nil {
 		var err error
 		baseURL, err = s.validateUpstreamBaseURL(baseURL)
