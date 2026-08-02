@@ -2,7 +2,6 @@ package admin
 
 import (
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/handler/dto"
@@ -49,10 +48,7 @@ type UpdatePromoCodeRequest struct {
 func (h *PromoHandler) List(c *gin.Context) {
 	page, pageSize := response.ParsePagination(c)
 	status := c.Query("status")
-	search := strings.TrimSpace(c.Query("search"))
-	if len(search) > 100 {
-		search = search[:100]
-	}
+	search := response.NormalizeSearch(c.Query("search"))
 
 	params := pagination.PaginationParams{
 		Page:      page,
