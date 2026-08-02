@@ -611,6 +611,8 @@ export default {
         apiKeyAuthSchemeDesc: 'Choose the API key auth header used when forwarding to an Anthropic-compatible upstream. Ollama Cloud uses Authorization: Bearer.',
         apiKeyAuthSchemeXApiKey: 'x-api-key',
         apiKeyAuthSchemeBearer: 'Authorization: Bearer',
+        disableBeta: 'Disable anthropic-beta',
+        enable1MContext: 'Enable 1M context',
         webSearchEmulation: 'Web Search Emulation',
         webSearchEmulationDesc:
           'Enable web search emulation for this API Key account. When a pure web_search request is detected, the gateway calls a third-party search API and constructs the response locally. Default follows channel config.',

@@ -1785,6 +1785,50 @@
         </div>
       </div>
 
+      <!-- Anthropic API Key beta 配置 -->
+      <div
+        v-if="account?.platform === 'anthropic' && account?.type === 'apikey'"
+        class="space-y-4 border-t border-gray-200 pt-4 dark:border-dark-600"
+      >
+        <div class="flex items-center justify-between">
+          <label class="input-label mb-0">{{ t('admin.accounts.anthropic.disableBeta') }}</label>
+          <button
+            type="button"
+            @click="toggleAnthropicDisableBeta"
+            :class="[
+              'relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2',
+              anthropicDisableBetaEnabled ? 'bg-primary-600' : 'bg-gray-200 dark:bg-dark-600'
+            ]"
+          >
+            <span
+              :class="[
+                'pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
+                anthropicDisableBetaEnabled ? 'translate-x-5' : 'translate-x-0'
+              ]"
+            />
+          </button>
+        </div>
+
+        <div class="flex items-center justify-between">
+          <label class="input-label mb-0">{{ t('admin.accounts.anthropic.enable1MContext') }}</label>
+          <button
+            type="button"
+            @click="toggleAnthropicEnable1MContext"
+            :class="[
+              'relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2',
+              anthropicEnable1MContextEnabled ? 'bg-primary-600' : 'bg-gray-200 dark:bg-dark-600'
+            ]"
+          >
+            <span
+              :class="[
+                'pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
+                anthropicEnable1MContextEnabled ? 'translate-x-5' : 'translate-x-0'
+              ]"
+            />
+          </button>
+        </div>
+      </div>
+
       <!-- Anthropic API Key: Web Search Emulation (hidden when global disabled) -->
       <div
         v-if="account?.platform === 'anthropic' && account?.type === 'apikey' && webSearchGlobalEnabled"
@@ -2956,8 +3000,30 @@ const codexImageToolMode = ref<CodexImageToolMode>('inherit')
 type AnthropicAPIKeyAuthScheme = 'x_api_key' | 'authorization_bearer'
 const anthropicPassthroughEnabled = ref(false)
 const anthropicAPIKeyAuthScheme = ref<AnthropicAPIKeyAuthScheme>('x_api_key')
+const anthropicDisableBetaEnabled = ref(false)
+const anthropicEnable1MContextEnabled = ref(false)
 const webSearchEmulationMode = ref('default')
 const webSearchGlobalEnabled = ref(false)
+
+// toggleAnthropicDisableBeta 切换关闭 beta 配置，并在开启时关闭互斥的 1M 上下文配置。
+// 参数无；返回值无。
+const toggleAnthropicDisableBeta = (): void => {
+  const nextEnabled = !anthropicDisableBetaEnabled.value
+  anthropicDisableBetaEnabled.value = nextEnabled
+  if (nextEnabled) {
+    anthropicEnable1MContextEnabled.value = false
+  }
+}
+
+// toggleAnthropicEnable1MContext 切换 1M 上下文配置，并在开启时关闭互斥的关闭 beta 配置。
+// 参数无；返回值无。
+const toggleAnthropicEnable1MContext = (): void => {
+  const nextEnabled = !anthropicEnable1MContextEnabled.value
+  anthropicEnable1MContextEnabled.value = nextEnabled
+  if (nextEnabled) {
+    anthropicDisableBetaEnabled.value = false
+  }
+}
 const {
   globalEnabled: quotaNotifyGlobalEnabled,
   state: quotaNotifyState,
@@ -3407,6 +3473,8 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   codexImageToolMode.value = 'inherit'
   anthropicPassthroughEnabled.value = false
   anthropicAPIKeyAuthScheme.value = 'x_api_key'
+  anthropicDisableBetaEnabled.value = false
+  anthropicEnable1MContextEnabled.value = false
   webSearchEmulationMode.value = 'default'
   if (newAccount.platform === 'openai' && (newAccount.type === 'oauth' || newAccount.type === 'setup-token' || newAccount.type === 'apikey')) {
     openaiPassthroughEnabled.value = extra?.openai_passthrough === true || extra?.openai_oauth_passthrough === true
@@ -3467,6 +3535,8 @@ const syncFormFromAccount = (newAccount: Account | null) => {
     anthropicAPIKeyAuthScheme.value = extra?.anthropic_apikey_auth_scheme === 'authorization_bearer'
       ? 'authorization_bearer'
       : 'x_api_key'
+    anthropicDisableBetaEnabled.value = extra?.anthropic_disable_beta === true
+    anthropicEnable1MContextEnabled.value = extra?.anthropic_enable_1m_context === true
     // 三态：string "default"/"enabled"/"disabled"，向后兼容旧 bool
     const wsVal = extra?.web_search_emulation
     if (wsVal === 'enabled' || wsVal === 'disabled') {
@@ -4625,6 +4695,16 @@ const handleSubmit = async () => {
         newExtra.anthropic_apikey_auth_scheme = 'authorization_bearer'
       } else {
         delete newExtra.anthropic_apikey_auth_scheme
+      }
+      if (anthropicDisableBetaEnabled.value) {
+        newExtra.anthropic_disable_beta = true
+      } else {
+        delete newExtra.anthropic_disable_beta
+      }
+      if (anthropicEnable1MContextEnabled.value) {
+        newExtra.anthropic_enable_1m_context = true
+      } else {
+        delete newExtra.anthropic_enable_1m_context
       }
       if (webSearchEmulationMode.value === 'default') {
         delete newExtra.web_search_emulation

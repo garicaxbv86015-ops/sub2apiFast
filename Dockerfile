@@ -52,21 +52,20 @@ RUN pnpm run build
 # build (emulated networking here was dropping module fetches with EOF).
 FROM --platform=${BUILDPLATFORM} ${GOLANG_IMAGE} AS backend-builder
 
-# Build arguments for version info (set by CI)
-ARG VERSION=
-ARG COMMIT=docker
-ARG DATE
 ARG GOPROXY
 ARG GOSUMDB
 # Populated by buildx from the --platform target (e.g. linux/amd64).
 ARG TARGETOS
 ARG TARGETARCH
+ARG ALPINE_MIRROR=https://mirrors.tencent.com/alpine
 
 ENV GOPROXY=${GOPROXY}
 ENV GOSUMDB=${GOSUMDB}
 
 # Install build dependencies
-RUN apk add --no-cache git ca-certificates tzdata
+RUN --mount=type=cache,id=sub2api-backend-apk-cache,target=/var/cache/apk \
+    if [ -n "${ALPINE_MIRROR}" ]; then sed -i "s#https://dl-cdn.alpinelinux.org/alpine#${ALPINE_MIRROR}#g" /etc/apk/repositories; fi && \
+    apk add --update-cache git ca-certificates tzdata
 
 WORKDIR /app/backend
 
@@ -82,6 +81,11 @@ COPY backend/ ./
 
 # Copy frontend dist from previous stage (must be after backend copy to avoid being overwritten)
 COPY --from=frontend-builder /app/backend/internal/web/dist ./internal/web/dist
+
+# 版本信息每次构建都会变化，放在最后避免影响系统包和依赖缓存。
+ARG VERSION=
+ARG COMMIT=docker
+ARG DATE
 
 # Build the binary (BuildType=release for CI builds, embed frontend)
 # Version precedence: build arg VERSION > exact git tag > cmd/server/VERSION

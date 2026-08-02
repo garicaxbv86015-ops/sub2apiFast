@@ -110,6 +110,13 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 	if beta, ok := account.HeaderOverrideValue("anthropic-beta"); ok {
 		finalBetaHeader, finalBetaShouldSet = beta, true
 	}
+	// 账号级 beta 配置在全局策略与请求头覆写之后生效：1M 配置可放行专属上游能力，
+	// 关闭 beta 则拥有最高优先级，避免不支持 claude-code beta 的上游继续报 400。
+	finalBetaHeader, finalBetaShouldSet = resolveAnthropicAPIKeyBetaOptions(
+		account,
+		finalBetaHeader,
+		finalBetaShouldSet,
+	)
 
 	// 能力维度 body sanitize：与最终 anthropic-beta header 对称
 	if sanitized, changed := sanitizeAnthropicBodyForBetaTokens(body, finalBetaHeader); changed {
@@ -167,14 +174,6 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 		applyClaudeCodeMimicHeaders(req, reqStream)
 	}
 
-	// 写入最终 anthropic-beta header
-	// 注：透传分支白名单可能写入了客户端 anthropic-beta，无条件 Del 一次再按 finalBeta
-	// 决定是否 set，确保 dropSet 过滤后的结果一定覆盖客户端原始值。
-	deleteHeaderAllForms(req.Header, "anthropic-beta")
-	if finalBetaShouldSet {
-		setHeaderRaw(req.Header, "anthropic-beta", finalBetaHeader)
-	}
-
 	// 同步 X-Claude-Code-Session-Id 头：取 body 中已处理的 metadata.user_id 的 session_id 覆盖
 	if sessionHeader := getHeaderRaw(req.Header, "X-Claude-Code-Session-Id"); sessionHeader != "" {
 		if uid := gjson.GetBytes(body, "metadata.user_id").String(); uid != "" {
@@ -187,6 +186,8 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 	// 账号级请求头覆写（仅 anthropic/openai api_key 账号启用时生效；OAuth 路径 no-op）。
 	// 放在所有 header 逻辑之后，确保配置值对同名头拥有最终决定权。
 	account.ApplyHeaderOverrides(req.Header)
+	// 请求头覆写之后写入预先计算的最终值，确保关闭 beta 不会被覆写重新引入。
+	writeResolvedAnthropicBetaHeader(req.Header, finalBetaHeader, finalBetaShouldSet)
 
 	// === DEBUG: 打印上游转发请求（headers + body 摘要），与 CLIENT_ORIGINAL 对比 ===
 	s.debugLogGatewaySnapshot("UPSTREAM_FORWARD", req.Header, body, map[string]string{

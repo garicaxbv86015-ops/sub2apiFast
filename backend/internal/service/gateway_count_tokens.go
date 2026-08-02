@@ -386,7 +386,13 @@ func (s *GatewayService) buildCountTokensRequestAnthropicAPIKeyPassthrough(
 	if beta, ok := account.HeaderOverrideValue("anthropic-beta"); ok {
 		clientBeta = beta
 	}
-	if sanitized, changed := sanitizeAnthropicBodyForBetaTokens(body, clientBeta); changed {
+	// 透传 count_tokens 与 messages 保持相同的账号级 beta 决策顺序。
+	finalBetaHeader, finalBetaShouldSet := resolveAnthropicAPIKeyBetaOptions(
+		account,
+		clientBeta,
+		clientBeta != "",
+	)
+	if sanitized, changed := sanitizeAnthropicBodyForBetaTokens(body, finalBetaHeader); changed {
 		body = sanitized
 	}
 
@@ -423,6 +429,10 @@ func (s *GatewayService) buildCountTokensRequestAnthropicAPIKeyPassthrough(
 
 	// 账号级请求头覆写（最终生效，覆盖上面所有来源的同名头）
 	account.ApplyHeaderOverrides(req.Header)
+	if account.IsAnthropicBetaDisabled() || account.IsAnthropic1MContextEnabled() {
+		// 账号级 beta 配置优先级高于透传头和普通请求头覆写。
+		writeResolvedAnthropicBetaHeader(req.Header, finalBetaHeader, finalBetaShouldSet)
+	}
 
 	return req, nil
 }
@@ -495,6 +505,13 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 	if beta, ok := account.HeaderOverrideValue("anthropic-beta"); ok {
 		finalBetaHeader, finalBetaShouldSet = beta, true
 	}
+	// 账号级 beta 配置必须在全局策略与请求头覆写之后决策，保证 1M 放行和关闭 beta
+	// 都与 messages 路径保持一致。
+	finalBetaHeader, finalBetaShouldSet = resolveAnthropicAPIKeyBetaOptions(
+		account,
+		finalBetaHeader,
+		finalBetaShouldSet,
+	)
 
 	// 能力维度 body sanitize：与最终 anthropic-beta header 对称
 	if sanitized, changed := sanitizeAnthropicBodyForBetaTokens(body, finalBetaHeader); changed {
@@ -547,12 +564,6 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 		applyClaudeCodeMimicHeaders(req, false)
 	}
 
-	// 写入最终 anthropic-beta header（Del 一次避免白名单透传值残留）
-	deleteHeaderAllForms(req.Header, "anthropic-beta")
-	if finalBetaShouldSet {
-		setHeaderRaw(req.Header, "anthropic-beta", finalBetaHeader)
-	}
-
 	// 同步 X-Claude-Code-Session-Id 头：取 body 中已处理的 metadata.user_id 的 session_id 覆盖
 	if sessionHeader := getHeaderRaw(req.Header, "X-Claude-Code-Session-Id"); sessionHeader != "" {
 		if uid := gjson.GetBytes(body, "metadata.user_id").String(); uid != "" {
@@ -564,6 +575,8 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 
 	// 账号级请求头覆写（仅 anthropic/openai api_key 账号启用时生效；OAuth 路径 no-op）
 	account.ApplyHeaderOverrides(req.Header)
+	// 请求头覆写后写入最终值，避免覆写重新带回已关闭的 anthropic-beta。
+	writeResolvedAnthropicBetaHeader(req.Header, finalBetaHeader, finalBetaShouldSet)
 
 	if c != nil && tokenType == "oauth" {
 		c.Set(claudeMimicDebugInfoKey, buildClaudeMimicDebugLine(req, body, account, tokenType, mimicClaudeCode))

@@ -671,6 +671,8 @@ export default {
         apiKeyAuthSchemeDesc: '选择转发到 Anthropic-compatible 上游时使用的 API Key 认证头。Ollama Cloud 使用 Authorization: Bearer。',
         apiKeyAuthSchemeXApiKey: 'x-api-key',
         apiKeyAuthSchemeBearer: 'Authorization: Bearer',
+        disableBeta: '关闭 anthropic-beta',
+        enable1MContext: '启用 1M 上下文',
         webSearchEmulation: 'Web Search 模拟',
         webSearchEmulationDesc:
           '为该 API Key 账号启用 web search 模拟。客户端发送纯 web_search 请求时，由网关调用第三方搜索 API 并构造响应返回。默认跟随渠道配置。',

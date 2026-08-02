@@ -329,7 +329,14 @@ func (s *GatewayService) buildUpstreamRequestAnthropicAPIKeyPassthrough(
 	if beta, ok := account.HeaderOverrideValue("anthropic-beta"); ok {
 		clientBeta = beta
 	}
-	if sanitized, changed := sanitizeAnthropicBodyForBetaTokens(body, clientBeta); changed {
+	// 自动透传路径同样先解析账号级配置，再根据最终 beta 清理 body，避免 header/body
+	// 能力不对称；关闭 beta 时这里会得到空值。
+	finalBetaHeader, finalBetaShouldSet := resolveAnthropicAPIKeyBetaOptions(
+		account,
+		clientBeta,
+		clientBeta != "",
+	)
+	if sanitized, changed := sanitizeAnthropicBodyForBetaTokens(body, finalBetaHeader); changed {
 		body = sanitized
 	}
 
@@ -367,6 +374,10 @@ func (s *GatewayService) buildUpstreamRequestAnthropicAPIKeyPassthrough(
 
 	// 账号级请求头覆写（最终生效，覆盖上面所有来源的同名头）
 	account.ApplyHeaderOverrides(req.Header)
+	if account.IsAnthropicBetaDisabled() || account.IsAnthropic1MContextEnabled() {
+		// 账号级 beta 配置优先级高于透传头和普通请求头覆写。
+		writeResolvedAnthropicBetaHeader(req.Header, finalBetaHeader, finalBetaShouldSet)
+	}
 
 	return req, body, nil
 }

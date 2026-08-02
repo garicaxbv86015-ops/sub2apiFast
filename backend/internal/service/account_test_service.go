@@ -23,6 +23,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/geminicli"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai_compat"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 	"github.com/Wei-Shaw/sub2api/internal/util/urlvalidator"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -313,6 +314,16 @@ func (s *AccountTestService) testClaudeAccountConnection(c *gin.Context, account
 
 	// 账号级请求头覆写：测试请求与真实转发保持一致的最终头
 	account.ApplyHeaderOverrides(req.Header)
+	if account.IsAnthropicBetaDisabled() || account.IsAnthropic1MContextEnabled() {
+		// 测试账号必须复用真实出站的账号级 beta 决策，否则后台测试会与实际调用结果不一致。
+		testBetaHeader := getHeaderRaw(req.Header, "anthropic-beta")
+		finalBetaHeader, finalBetaShouldSet := resolveAnthropicAPIKeyBetaOptions(
+			account,
+			testBetaHeader,
+			testBetaHeader != "",
+		)
+		writeResolvedAnthropicBetaHeader(req.Header, finalBetaHeader, finalBetaShouldSet)
+	}
 
 	// Get proxy URL
 	proxyURL := ""

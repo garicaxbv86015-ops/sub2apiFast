@@ -151,6 +151,8 @@ func ProvideSystemHandler(updateService *service.UpdateService, lockService *ser
 
 // ProvideSettingHandler creates SettingHandler with version from BuildInfo
 func ProvideSettingHandler(settingService *service.SettingService, buildInfo BuildInfo, notificationEmailService *service.NotificationEmailService) *SettingHandler {
+	// 将构建版本同步给公开设置注入服务，避免首页 __APP_CONFIG__.version 为空。
+	settingService.SetVersion(buildInfo.Version)
 	h := NewSettingHandler(settingService, buildInfo.Version)
 	h.SetNotificationEmailService(notificationEmailService)
 	return h

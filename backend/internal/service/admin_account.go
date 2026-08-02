@@ -309,6 +309,9 @@ func (s *adminServiceImpl) DuplicateAccount(ctx context.Context, id int64, actor
 	if err != nil {
 		return nil, fmt.Errorf("normalize duplicate account extra: %w", err)
 	}
+	if err := ValidateAnthropicAPIKeyBetaOptionsExtra(input.Platform, input.Type, accountExtra); err != nil {
+		return nil, fmt.Errorf("validate duplicate account beta options: %w", err)
+	}
 	if err := NormalizeHeaderOverrideCredentials(input.Credentials); err != nil {
 		return nil, err
 	}
@@ -392,6 +395,37 @@ func normalizeOpenAILongContextBillingUpdateExtra(account *Account, input *Updat
 		}
 	}
 	return normalized, nil
+}
+
+// ValidateAnthropicAPIKeyBetaOptionsExtra 校验 Anthropic API Key 账号的 beta 配置值。
+// 参数 platform 为账号平台，accountType 为账号类型，extra 为待保存的扩展配置；返回值为校验错误或 nil。
+func ValidateAnthropicAPIKeyBetaOptionsExtra(platform, accountType string, extra map[string]any) error {
+	if platform != PlatformAnthropic || accountType != AccountTypeAPIKey {
+		return nil
+	}
+	for _, key := range []string{anthropicDisableBetaExtraKey, anthropicEnable1MContextExtraKey} {
+		raw, exists := extra[key]
+		if !exists {
+			continue
+		}
+		if _, ok := raw.(bool); !ok {
+			return infraerrors.BadRequest(
+				"ANTHROPIC_BETA_OPTION_INVALID",
+				key+" must be a boolean",
+			)
+		}
+	}
+	return nil
+}
+
+// validateAnthropicAPIKeyBetaOptionsUpdateExtra 校验更新后账号类型下的 beta 配置值。
+// 参数 account 为当前账号，input 为更新入参，extra 为已规范化的扩展配置；返回值为校验错误或 nil。
+func validateAnthropicAPIKeyBetaOptionsUpdateExtra(account *Account, input *UpdateAccountInput, extra map[string]any) error {
+	accountType := account.Type
+	if input.Type != "" {
+		accountType = input.Type
+	}
+	return ValidateAnthropicAPIKeyBetaOptionsExtra(account.Platform, accountType, extra)
 }
 
 // ValidateGrokMediaEligibilityExtra validates the optional media-routing
@@ -519,6 +553,9 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 	if err != nil {
 		return nil, err
 	}
+	if err := ValidateAnthropicAPIKeyBetaOptionsExtra(input.Platform, input.Type, accountExtra); err != nil {
+		return nil, err
+	}
 	accountExtra, err = normalizeGrokMediaEligibilityExtra(input.Platform, accountExtra)
 	if err != nil {
 		return nil, err
@@ -608,6 +645,9 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		}
 		normalizedExtra, err = normalizeGrokMediaEligibilityUpdateExtra(account, input, normalizedExtra)
 		if err != nil {
+			return nil, err
+		}
+		if err := validateAnthropicAPIKeyBetaOptionsUpdateExtra(account, input, normalizedExtra); err != nil {
 			return nil, err
 		}
 	}
@@ -910,12 +950,18 @@ func (s *adminServiceImpl) UpdateAccountExtra(ctx context.Context, id int64, upd
 	delete(updates, OllamaCloudUsageSessionExtraKey)
 	delete(updates, OllamaCloudUsageAutoRefreshExtraKey)
 	delete(updates, OllamaCloudUsageSnapshotExtraKey)
-	if _, exists := updates[openAILongContextBillingEnabledKey]; exists {
+	_, hasLongContextBillingUpdate := updates[openAILongContextBillingEnabledKey]
+	_, hasAnthropicDisableBetaUpdate := updates[anthropicDisableBetaExtraKey]
+	_, hasAnthropicEnable1MContextUpdate := updates[anthropicEnable1MContextExtraKey]
+	if hasLongContextBillingUpdate || hasAnthropicDisableBetaUpdate || hasAnthropicEnable1MContextUpdate {
 		account, err := s.accountRepo.GetByID(ctx, id)
 		if err != nil {
 			return err
 		}
 		if err := ValidateOpenAILongContextBillingExtra(account.Platform, updates); err != nil {
+			return err
+		}
+		if err := ValidateAnthropicAPIKeyBetaOptionsExtra(account.Platform, account.Type, updates); err != nil {
 			return err
 		}
 	}
@@ -961,10 +1007,13 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 
 	needMixedChannelCheck := input.GroupIDs != nil && !input.SkipMixedChannelCheck
 	_, hasLongContextBillingUpdate := input.Extra[openAILongContextBillingEnabledKey]
+	_, hasAnthropicDisableBetaUpdate := input.Extra[anthropicDisableBetaExtraKey]
+	_, hasAnthropicEnable1MContextUpdate := input.Extra[anthropicEnable1MContextExtraKey]
+	hasAnthropicBetaOptionsUpdate := hasAnthropicDisableBetaUpdate || hasAnthropicEnable1MContextUpdate
 
 	// 预取所有目标账号，供凭据守卫/代理守卫/混合渠道检查共用，避免多次 DB 查询。
 	var cachedTargets []*Account
-	if len(input.Credentials) > 0 || input.ProxyID != nil || needMixedChannelCheck || hasLongContextBillingUpdate || input.ProbeEnabled != nil || input.RateMultiplier != nil {
+	if len(input.Credentials) > 0 || input.ProxyID != nil || needMixedChannelCheck || hasLongContextBillingUpdate || hasAnthropicBetaOptionsUpdate || input.ProbeEnabled != nil || input.RateMultiplier != nil {
 		loaded, err := s.accountRepo.GetByIDs(ctx, input.AccountIDs)
 		if err != nil {
 			return nil, err
@@ -997,6 +1046,16 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 				return nil, err
 			}
 			break
+		}
+	}
+	if hasAnthropicBetaOptionsUpdate {
+		for _, account := range cachedTargets {
+			if account == nil {
+				continue
+			}
+			if err := ValidateAnthropicAPIKeyBetaOptionsExtra(account.Platform, account.Type, input.Extra); err != nil {
+				return nil, err
+			}
 		}
 	}
 
