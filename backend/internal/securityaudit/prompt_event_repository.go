@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -326,6 +327,17 @@ func eventDetailColumns(alias string) string {
 	return eventColumns(alias) + fmt.Sprintf(",%[1]s.full_prompt", alias)
 }
 
+// unmarshalEventField decodes an optional JSON column, logging (but not failing on)
+// corrupt payloads so the rest of the event stays readable.
+func unmarshalEventField(eventID int64, column string, raw []byte, dest any) {
+	if len(raw) == 0 {
+		return
+	}
+	if err := json.Unmarshal(raw, dest); err != nil {
+		slog.Warn("prompt_guard.event_field_corrupt", "event_id", eventID, "column", column, "error", err)
+	}
+}
+
 func scanEvent(row rowScanner, withFullPrompt ...bool) (*Event, error) {
 	event := &Event{}
 	var userID, apiKeyID, groupID sql.NullInt64
@@ -348,10 +360,10 @@ func scanEvent(row rowScanner, withFullPrompt ...bool) (*Event, error) {
 	event.Snapshot.UserID = nullableInt64Value(userID)
 	event.Snapshot.APIKeyID = nullableInt64Value(apiKeyID)
 	event.Snapshot.GroupID = nullableInt64Ptr(groupID)
-	_ = json.Unmarshal(categories, &event.Categories)
-	_ = json.Unmarshal(matched, &event.MatchedScanners)
-	_ = json.Unmarshal(scores, &event.ScannerScores)
-	_ = json.Unmarshal(evidence, &event.ScannerEvidence)
+	unmarshalEventField(event.ID, "categories", categories, &event.Categories)
+	unmarshalEventField(event.ID, "matched_scanners", matched, &event.MatchedScanners)
+	unmarshalEventField(event.ID, "scanner_scores", scores, &event.ScannerScores)
+	unmarshalEventField(event.ID, "scanner_evidence", evidence, &event.ScannerEvidence)
 	result := NormalizedResult{Decision: event.Decision, RiskLevel: event.RiskLevel, Action: event.Action,
 		Categories: event.Categories, MatchedScanners: event.MatchedScanners, ScannerScores: event.ScannerScores,
 		ScannerEvidence: event.ScannerEvidence}

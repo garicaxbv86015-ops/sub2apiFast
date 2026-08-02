@@ -189,7 +189,7 @@ func (s *PaymentService) toPaid(ctx context.Context, o *dbent.PaymentOrder, trad
 func (s *PaymentService) alreadyProcessed(ctx context.Context, o *dbent.PaymentOrder) error {
 	cur, err := s.entClient.PaymentOrder.Get(ctx, o.ID)
 	if err != nil {
-		return nil
+		return fmt.Errorf("reload order %d for duplicate notification: %w", o.ID, err)
 	}
 	switch cur.Status {
 	case OrderStatusCompleted, OrderStatusRefunded:

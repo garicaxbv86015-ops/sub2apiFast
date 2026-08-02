@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
@@ -103,6 +104,7 @@ func (s *PaymentConfigService) GetGroupInfoMap(ctx context.Context, plans []*dbe
 	}
 	groups, err := s.entClient.Group.Query().Where(group.IDIn(ids...)).All(ctx)
 	if err != nil {
+		slog.Error("failed to load plan groups; plan group info will be omitted", "groupIDs", ids, "error", err)
 		return nil
 	}
 	m := make(map[int64]PlanGroupInfo, len(groups))

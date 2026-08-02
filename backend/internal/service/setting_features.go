@@ -325,6 +325,7 @@ func (s *SettingService) GetDefaultUserRPMLimit(ctx context.Context) int {
 func (s *SettingService) GetDefaultSubscriptions(ctx context.Context) []DefaultSubscriptionSetting {
 	value, err := s.settingRepo.GetValue(ctx, SettingKeyDefaultSubscriptions)
 	if err != nil {
+		slog.Warn("failed to load default subscriptions setting; new users get none", "error", err)
 		return nil
 	}
 	return parseDefaultSubscriptions(value)
