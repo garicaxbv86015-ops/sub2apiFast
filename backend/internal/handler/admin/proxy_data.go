@@ -32,12 +32,9 @@ func (h *ProxyHandler) ExportData(c *gin.Context) {
 	} else {
 		protocol := c.Query("protocol")
 		status := c.Query("status")
-		search := strings.TrimSpace(c.Query("search"))
+		search := response.NormalizeSearch(c.Query("search"))
 		sortBy := c.DefaultQuery("sort_by", "id")
 		sortOrder := c.DefaultQuery("sort_order", "desc")
-		if len(search) > 100 {
-			search = search[:100]
-		}
 
 		proxies, err = h.listProxiesFiltered(ctx, protocol, status, search, sortBy, sortOrder)
 		if err != nil {

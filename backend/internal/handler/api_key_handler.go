@@ -4,7 +4,6 @@ package handler
 import (
 	"context"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/handler/dto"
@@ -81,10 +80,7 @@ func (h *APIKeyHandler) List(c *gin.Context) {
 
 	// Parse filter parameters
 	var filters service.APIKeyListFilters
-	if search := strings.TrimSpace(c.Query("search")); search != "" {
-		if len(search) > 100 {
-			search = search[:100]
-		}
+	if search := response.NormalizeSearch(c.Query("search")); search != "" {
 		filters.Search = search
 	}
 	filters.Status = c.Query("status")

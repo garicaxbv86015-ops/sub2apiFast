@@ -11,20 +11,8 @@ import (
 )
 
 func (s *OpsService) GetDashboardOverview(ctx context.Context, filter *OpsDashboardFilter) (*OpsDashboardOverview, error) {
-	if err := s.RequireMonitoringEnabled(ctx); err != nil {
+	if err := s.validateOpsDashboardFilter(ctx, filter); err != nil {
 		return nil, err
-	}
-	if s.opsRepo == nil {
-		return nil, infraerrors.ServiceUnavailable("OPS_REPO_UNAVAILABLE", "Ops repository not available")
-	}
-	if filter == nil {
-		return nil, infraerrors.BadRequest("OPS_FILTER_REQUIRED", "filter is required")
-	}
-	if filter.StartTime.IsZero() || filter.EndTime.IsZero() {
-		return nil, infraerrors.BadRequest("OPS_TIME_RANGE_REQUIRED", "start_time/end_time are required")
-	}
-	if filter.StartTime.After(filter.EndTime) {
-		return nil, infraerrors.BadRequest("OPS_TIME_RANGE_INVALID", "start_time must be <= end_time")
 	}
 
 	// Resolve query mode (requested via query param, or DB default).
@@ -68,6 +56,28 @@ func (s *OpsService) GetDashboardOverview(ctx context.Context, filter *OpsDashbo
 	overview.HealthScore = computeDashboardHealthScore(time.Now().UTC(), overview)
 
 	return overview, nil
+}
+
+// validateOpsDashboardFilter runs the preconditions shared by every Ops
+// dashboard query: monitoring must be enabled, the Ops repository must be
+// available, and the filter must carry a valid, non-inverted time range.
+func (s *OpsService) validateOpsDashboardFilter(ctx context.Context, filter *OpsDashboardFilter) error {
+	if err := s.RequireMonitoringEnabled(ctx); err != nil {
+		return err
+	}
+	if s.opsRepo == nil {
+		return infraerrors.ServiceUnavailable("OPS_REPO_UNAVAILABLE", "Ops repository not available")
+	}
+	if filter == nil {
+		return infraerrors.BadRequest("OPS_FILTER_REQUIRED", "filter is required")
+	}
+	if filter.StartTime.IsZero() || filter.EndTime.IsZero() {
+		return infraerrors.BadRequest("OPS_TIME_RANGE_REQUIRED", "start_time/end_time are required")
+	}
+	if filter.StartTime.After(filter.EndTime) {
+		return infraerrors.BadRequest("OPS_TIME_RANGE_INVALID", "start_time must be <= end_time")
+	}
+	return nil
 }
 
 func (s *OpsService) resolveOpsQueryMode(ctx context.Context, requested OpsQueryMode) OpsQueryMode {

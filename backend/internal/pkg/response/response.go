@@ -5,6 +5,7 @@ import (
 	"log"
 	"math"
 	"net/http"
+	"strings"
 
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/util/logredact"
@@ -164,6 +165,19 @@ func PaginatedWithResult(c *gin.Context, items any, pagination *PaginationResult
 		PageSize: pagination.PageSize,
 		Pages:    pagination.Pages,
 	})
+}
+
+// MaxSearchLength is the maximum number of bytes retained from a search query.
+const MaxSearchLength = 100
+
+// NormalizeSearch trims surrounding whitespace from a search query and caps its
+// length at MaxSearchLength bytes.
+func NormalizeSearch(raw string) string {
+	s := strings.TrimSpace(raw)
+	if len(s) > MaxSearchLength {
+		s = s[:MaxSearchLength]
+	}
+	return s
 }
 
 // ParsePagination 解析分页参数
