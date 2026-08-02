@@ -364,6 +364,7 @@ func (s *UserService) applyExplicitProviderAvailability(ctx context.Context, sum
 		SettingKeyDingTalkConnectEnabled,
 	})
 	if err != nil {
+		slog.Warn("failed to load identity provider availability settings; falling back to enabled", "error", err)
 		return
 	}
 

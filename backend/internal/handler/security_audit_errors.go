@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/googleapi"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/securityaudit"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	coderws "github.com/coder/websocket"
@@ -139,11 +140,14 @@ func writeSecurityAuditWSError(ctx context.Context, conn *coderws.Conn, decision
 		"error": gin.H{"type": "invalid_request_error", "code": securityAuditErrorCode(decision), "message": securityAuditMessage(decision)},
 	})
 	if err != nil {
+		logger.LegacyPrintf("handler.security_audit", "failed to marshal prompt guard websocket error: %v", err)
 		return
 	}
 	writeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	_ = conn.Write(writeCtx, coderws.MessageText, payload)
+	if err := conn.Write(writeCtx, coderws.MessageText, payload); err != nil {
+		logger.LegacyPrintf("handler.security_audit", "failed to write prompt guard websocket error: %v", err)
+	}
 }
 
 type legacyContentModerationDecision struct{ value *securityaudit.LegacyDecision }

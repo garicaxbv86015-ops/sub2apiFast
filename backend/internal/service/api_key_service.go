@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"html"
+	"log/slog"
 	"sort"
 	"strconv"
 	"strings"
@@ -623,6 +624,7 @@ func (s *APIKeyService) fillCurrentConcurrency(ctx context.Context, keys []APIKe
 	}
 	counts, err := s.concurrencyService.GetAPIKeyConcurrencyBatch(ctx, ids)
 	if err != nil {
+		slog.Warn("failed to load api key concurrency; reporting zero", "apiKeyCount", len(ids), "error", err)
 		return
 	}
 	for i := range keys {
@@ -636,6 +638,7 @@ func (s *APIKeyService) currentConcurrencyForAPIKey(ctx context.Context, apiKeyI
 	}
 	counts, err := s.concurrencyService.GetAPIKeyConcurrencyBatch(ctx, []int64{apiKeyID})
 	if err != nil {
+		slog.Warn("failed to load api key concurrency; reporting zero", "apiKeyID", apiKeyID, "error", err)
 		return 0
 	}
 	return counts[apiKeyID]
