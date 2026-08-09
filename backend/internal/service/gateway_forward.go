@@ -336,6 +336,17 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 	if err := replaceBody(FilterWebSearchHistoryBlocks(body, reqModel)); err != nil {
 		return nil, err
 	}
+	// 某些第三方 GLM 兼容上游会返回空 signature 的 thinking 块，却在下一轮回传时
+	// 拒绝该块。仅剥离这种上游自身无法接受的无效块，并保留同一消息的文本和工具内容。
+	if ResolveThinkingProtocol(reqModel) == ThinkingProtocolPassbackRequired {
+		filteredBody := StripEmptySignatureThinkingBlocks(body)
+		if !bytes.Equal(filteredBody, body) {
+			if err := replaceBody(filteredBody); err != nil {
+				return nil, err
+			}
+			logger.LegacyPrintf("service.gateway", "Account %d: removed empty-signature thinking blocks for %s", account.ID, reqModel)
+		}
+	}
 	// Pre-filter: remove thinking blocks with missing/invalid signatures before forwarding.
 	// Clients (e.g. Claude Code) sometimes send multi-turn conversations where a historical
 	// assistant message contains a thinking block that is missing the required "signature" field,

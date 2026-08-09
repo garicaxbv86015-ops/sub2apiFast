@@ -27,6 +27,7 @@ func TestResolveThinkingProtocol(t *testing.T) {
 		{"kimi code bare k3-256k", "k3-256k", ThinkingProtocolPassbackRequired},
 		{"moonshot-v1", "moonshot-v1-32k", ThinkingProtocolPassbackRequired},
 		{"glm-5.1", "glm-5.1", ThinkingProtocolPassbackRequired},
+		{"glm 5.2 无连字符别名", "glm5.2", ThinkingProtocolPassbackRequired},
 		{"qwen-2 thinking variant", "qwen-2-72b-thinking", ThinkingProtocolPassbackRequired},
 		{"qwen3 thinking (real Alibaba naming)", "qwen3-235b-a22b-thinking-2507", ThinkingProtocolPassbackRequired},
 		{"qwen3-next thinking", "qwen3-next-80b-a3b-thinking", ThinkingProtocolPassbackRequired},
@@ -78,6 +79,7 @@ func TestShouldPreFilterThinkingBlocks(t *testing.T) {
 		{"deepseek-v4-pro", false},
 		{"kimi-coding", false},
 		{"glm-5.1", false},
+		{"glm5.2", false},
 		{"gpt-5.1", false},
 		{"", false},
 	}

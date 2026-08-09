@@ -38,7 +38,7 @@ const (
 //
 // 匹配规则按厂商前缀硬编码：
 //   - anthropic-strict: claude-* / opus-* / sonnet-* / haiku-*
-//   - passback-required: deepseek-* / kimi-* / moonshot-* / glm-* /
+//   - passback-required: deepseek-* / kimi-* / moonshot-* / glm-* / glm数字别名 /
 //     minimax-* / minimax-m* / (qwen-|qwen2-|qwen3-|qwen4-)*-thinking /
 //     Kimi Code bare aliases k3 / k3-256k（精确匹配，避免宽泛 k3 前缀）
 //   - unknown: 其他模型（保守不剥离）
@@ -64,6 +64,8 @@ func ResolveThinkingProtocol(modelID string) ThinkingProtocol {
 		strings.HasPrefix(id, "kimi-"),
 		strings.HasPrefix(id, "moonshot-"),
 		strings.HasPrefix(id, "glm-"),
+		// 部分兼容平台将 glm-5.2 映射为 glm5.2，仅接受 glm 后紧跟数字的别名，避免误判其他前缀。
+		(strings.HasPrefix(id, "glm") && len(id) > len("glm") && id[len("glm")] >= '0' && id[len("glm")] <= '9'),
 		id == "k3",
 		id == "k3-256k":
 		return ThinkingProtocolPassbackRequired

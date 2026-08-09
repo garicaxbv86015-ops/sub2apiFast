@@ -85,6 +85,11 @@ func (s *GatewayService) forwardAnthropicAPIKeyPassthroughWithInput(
 	// passback-required third-party upstreams such as GLM/Kimi/DeepSeek,
 	// which reject server_tool_use with 400). input.RequestModel 已是映射后的模型 ID。
 	input.Body = FilterWebSearchHistoryBlocks(input.Body, input.RequestModel)
+	// 兼容部分 GLM 上游：其首轮响应会返回空 signature 的 thinking 块，下一轮却拒绝回传该块。
+	// 仅删除同一条 assistant 消息仍保留文本或工具结果时的无效块，避免破坏连续对话上下文。
+	if ResolveThinkingProtocol(input.RequestModel) == ThinkingProtocolPassbackRequired {
+		input.Body = StripEmptySignatureThinkingBlocks(input.Body)
+	}
 	if input.Parsed != nil {
 		// 透传分支也会改写实际 wire body，成功 usage hash 依赖这里同步当前 body。
 		if err := input.Parsed.ReplaceBody(input.Body); err != nil {

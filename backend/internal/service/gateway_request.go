@@ -560,6 +560,79 @@ func StripEmptyTextBlocks(body []byte) []byte {
 	return out
 }
 
+// StripEmptySignatureThinkingBlocks 删除 assistant 历史消息中 signature 为空的 thinking 块。
+// 参数 body 为待转发的 Anthropic Messages 请求体；返回值为过滤后的请求体，无法安全过滤时返回原请求体。
+// 部分第三方 Anthropic 兼容上游会在响应中返回空 signature，却在下一轮要求该字段非空。
+// 仅当同一消息仍保留其他内容时才删除，避免制造空 assistant 消息。
+func StripEmptySignatureThinkingBlocks(body []byte) []byte {
+	// 没有 thinking 块时不解析 JSON，保持原始请求体和转发性能。
+	if !bytes.Contains(body, patternTypeThinking) &&
+		!bytes.Contains(body, patternTypeThinkingSpaced) &&
+		!bytes.Contains(body, patternTypeRedactedThinking) &&
+		!bytes.Contains(body, patternTypeRedactedSpaced) {
+		return body
+	}
+
+	var req map[string]any
+	if err := json.Unmarshal(body, &req); err != nil {
+		return body
+	}
+
+	messages, ok := req["messages"].([]any)
+	if !ok {
+		return body
+	}
+
+	modified := false
+	for _, message := range messages {
+		messageMap, ok := message.(map[string]any)
+		if !ok || messageMap["role"] != "assistant" {
+			continue
+		}
+
+		content, ok := messageMap["content"].([]any)
+		if !ok {
+			continue
+		}
+
+		filteredContent := make([]any, 0, len(content))
+		removed := false
+		for _, block := range content {
+			blockMap, ok := block.(map[string]any)
+			if !ok {
+				filteredContent = append(filteredContent, block)
+				continue
+			}
+
+			blockType, _ := blockMap["type"].(string)
+			if blockType == "thinking" || blockType == "redacted_thinking" {
+				signature, hasSignature := blockMap["signature"].(string)
+				if !hasSignature || strings.TrimSpace(signature) == "" {
+					removed = true
+					continue
+				}
+			}
+			filteredContent = append(filteredContent, block)
+		}
+
+		// 仅删除有普通文本、工具块等可继续承载上下文的 thinking 块。
+		if removed && len(filteredContent) > 0 {
+			messageMap["content"] = filteredContent
+			modified = true
+		}
+	}
+
+	if !modified {
+		return body
+	}
+
+	filteredBody, err := json.Marshal(req)
+	if err != nil {
+		return body
+	}
+	return filteredBody
+}
+
 // FilterThinkingBlocks removes thinking blocks from request body
 // Returns filtered body or original body if filtering fails (fail-safe)
 // This prevents 400 errors from invalid thinking block signatures.
