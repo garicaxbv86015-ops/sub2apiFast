@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"strings"
@@ -464,7 +465,9 @@ func (s *PromptService) DeleteByFilter(ctx context.Context, request DeleteByFilt
 
 func (s *PromptService) deletePayloads(ctx context.Context, jobIDs []int64) {
 	for _, id := range jobIDs {
-		_ = s.payload.Delete(ctx, id)
+		if err := s.payload.Delete(ctx, id); err != nil {
+			slog.Warn("prompt_guard.payload_delete_failed", "job_id", id, "error", err)
+		}
 	}
 }
 

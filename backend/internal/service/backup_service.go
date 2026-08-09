@@ -198,6 +198,7 @@ func (s *BackupService) recoverStaleRecords() {
 
 	records, err := s.loadRecords(ctx)
 	if err != nil {
+		logger.LegacyPrintf("service.backup", "[Backup] 加载备份记录失败，跳过孤立记录清理: %v", err)
 		return
 	}
 	for i := range records {
@@ -206,13 +207,19 @@ func (s *BackupService) recoverStaleRecords() {
 			records[i].ErrorMsg = "interrupted by server restart"
 			records[i].Progress = ""
 			records[i].FinishedAt = time.Now().Format(time.RFC3339)
-			_ = s.saveRecord(ctx, &records[i])
+			if err := s.saveRecord(ctx, &records[i]); err != nil {
+				logger.LegacyPrintf("service.backup", "[Backup] 保存孤立 running 记录失败: id=%s err=%v", records[i].ID, err)
+				continue
+			}
 			logger.LegacyPrintf("service.backup", "[Backup] recovered stale running record: %s", records[i].ID)
 		}
 		if records[i].RestoreStatus == "running" {
 			records[i].RestoreStatus = "failed"
 			records[i].RestoreError = "interrupted by server restart"
-			_ = s.saveRecord(ctx, &records[i])
+			if err := s.saveRecord(ctx, &records[i]); err != nil {
+				logger.LegacyPrintf("service.backup", "[Backup] 保存孤立 restoring 记录失败: id=%s err=%v", records[i].ID, err)
+				continue
+			}
 			logger.LegacyPrintf("service.backup", "[Backup] recovered stale restoring record: %s", records[i].ID)
 		}
 	}

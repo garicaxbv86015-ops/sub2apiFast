@@ -403,6 +403,7 @@ func parseUserPlatformQuotaHash(m map[string]string) *service.UserPlatformQuotaC
 		}
 		f, err := strconv.ParseFloat(s, 64)
 		if err != nil {
+			log.Printf("billing_cache: corrupt quota float field %q (ignoring): %v", s, err)
 			return nil
 		}
 		return &f
@@ -413,6 +414,7 @@ func parseUserPlatformQuotaHash(m map[string]string) *service.UserPlatformQuotaC
 		}
 		n, err := strconv.ParseInt(s, 10, 64)
 		if err != nil {
+			log.Printf("billing_cache: corrupt quota timestamp field %q (ignoring): %v", s, err)
 			return nil
 		}
 		t := time.Unix(n, 0).UTC()

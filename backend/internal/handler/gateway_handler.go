@@ -1544,6 +1544,7 @@ func (h *GatewayHandler) buildAPIKeyDailyUsage(c *gin.Context, userID, apiKeyID 
 	startTime, endTime := apiKeyDailyUsageRange(days, c.Query("timezone"))
 	stats, err := h.usageService.GetAPIKeyDailyUsage(c.Request.Context(), userID, apiKeyID, startTime, endTime)
 	if err != nil {
+		logger.LegacyPrintf("handler.gateway", "failed to load api key daily usage: userID=%d apiKeyID=%d err=%v", userID, apiKeyID, err)
 		return nil
 	}
 	return stats

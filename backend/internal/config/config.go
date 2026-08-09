@@ -3669,6 +3669,7 @@ func isHTTPScheme(scheme string) bool {
 func warnIfInsecureURL(field, raw string) {
 	u, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil {
+		slog.Warn("url is not parseable; cannot verify it uses https", "field", field, "error", err)
 		return
 	}
 	if strings.EqualFold(u.Scheme, "http") {
