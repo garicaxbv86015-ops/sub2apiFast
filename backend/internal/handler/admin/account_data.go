@@ -540,12 +540,9 @@ func (h *AccountHandler) resolveExportAccounts(ctx context.Context, ids []int64,
 	accountType := c.Query("type")
 	status := c.Query("status")
 	privacyMode := strings.TrimSpace(c.Query("privacy_mode"))
-	search := strings.TrimSpace(c.Query("search"))
+	search := response.NormalizeSearch(c.Query("search"))
 	sortBy := c.DefaultQuery("sort_by", "name")
 	sortOrder := c.DefaultQuery("sort_order", "asc")
-	if len(search) > 100 {
-		search = search[:100]
-	}
 
 	groupID := int64(0)
 	if groupIDStr := c.Query("group"); groupIDStr != "" {

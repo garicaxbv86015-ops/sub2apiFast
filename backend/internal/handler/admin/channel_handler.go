@@ -301,10 +301,7 @@ func accountStatsPricingRuleRequestToService(r accountStatsPricingRuleRequest) s
 func (h *ChannelHandler) List(c *gin.Context) {
 	page, pageSize := response.ParsePagination(c)
 	status := c.Query("status")
-	search := strings.TrimSpace(c.Query("search"))
-	if len(search) > 100 {
-		search = search[:100]
-	}
+	search := response.NormalizeSearch(c.Query("search"))
 
 	channels, pag, err := h.channelService.List(c.Request.Context(), pagination.PaginationParams{
 		Page:      page,
