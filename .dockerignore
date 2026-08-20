@@ -26,6 +26,11 @@ docs/
 # OS files
 .DS_Store
 Thumbs.db
+# macOS AppleDouble resource-fork sidecar files (._<name>).
+# These sneak in when source is copied from macOS and end in .sql/.go/etc.,
+# which lets them get embedded/compiled and break builds at runtime
+# (e.g. migrations). Exclude them from the build context.
+._*
 
 # Build artifacts
 dist/
