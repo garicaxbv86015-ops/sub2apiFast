@@ -221,7 +221,7 @@ func (f *ChannelMonitorQuotaFetcher) fetchUncached(ctx context.Context, accountI
 			return f.fetchCNQuota(ctx, account, now)
 		}
 		return f.fetchCNBalance(ctx, account, now)
-	case domain.PlatformOpenCodeGo:
+	case domain.PlatformOpenCodeGo, domain.PlatformMirasim:
 		return f.fetchCNQuota(ctx, account, now)
 	default:
 		return f.fetchUsage(ctx, account, now)

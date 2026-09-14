@@ -984,6 +984,7 @@ export default {
         deepseek: 'DeepSeek',
         minimax: 'MiniMax',
         opencode_go: 'OpenCode',
+        mirasim: 'Mirasim',
         composite: 'Composite',
       },
       deleteConfirm:

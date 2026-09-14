@@ -61,6 +61,9 @@ func RegisterAdminRoutes(
 		// Grok OAuth
 		registerGrokOAuthRoutes(admin, h)
 
+		// Mirasim OAuth
+		registerMirasimOAuthRoutes(admin, h)
+
 		// 国产供应商（kimi/zhipu/deepseek）额度与余额
 		registerCNProviderRoutes(admin, h)
 
@@ -491,6 +494,19 @@ func registerGrokOAuthRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 		grok.GET("/accounts/:id/quota", h.Admin.GrokOAuth.QueryQuota)
 		grok.POST("/accounts/:id/reset-quota", h.Admin.GrokOAuth.ResetQuota)
 		grok.GET("/runtime-sanity", h.Admin.GrokOAuth.RuntimeSanity)
+	}
+}
+
+// registerMirasimOAuthRoutes 注册 Mirasim 平台的 OAuth 与邮箱验证码授权端点。
+func registerMirasimOAuthRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+	mirasim := admin.Group("/mirasim")
+	{
+		mirasim.POST("/oauth/auth-url", h.Admin.MirasimOAuth.GenerateAuthURL)
+		mirasim.POST("/oauth/exchange-code", h.Admin.MirasimOAuth.ExchangeCode)
+		mirasim.POST("/oauth/send-code", h.Admin.MirasimOAuth.SendEmailCode)
+		mirasim.POST("/oauth/verify-code", h.Admin.MirasimOAuth.VerifyEmailCode)
+		mirasim.POST("/oauth/refresh-token", h.Admin.MirasimOAuth.RefreshToken)
+		mirasim.POST("/oauth/import-local", h.Admin.MirasimOAuth.ImportLocal)
 	}
 }
 

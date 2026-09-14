@@ -136,6 +136,28 @@
                 t('admin.accounts.oauth.openai.codexPatAuth')
               }}</span>
             </label>
+            <label v-if="showEmailCodeOption" class="flex cursor-pointer items-center gap-2">
+              <input
+                v-model="inputMethod"
+                type="radio"
+                value="email_code"
+                class="text-blue-600 focus:ring-blue-500"
+              />
+              <span class="text-sm text-blue-900 dark:text-blue-200">{{
+                t('admin.accounts.oauth.mirasim.emailCodeAuth')
+              }}</span>
+            </label>
+            <label v-if="showLocalAppOption" class="flex cursor-pointer items-center gap-2">
+              <input
+                v-model="inputMethod"
+                type="radio"
+                value="local_app"
+                class="text-blue-600 focus:ring-blue-500"
+              />
+              <span class="text-sm text-blue-900 dark:text-blue-200">{{
+                t('admin.accounts.oauth.mirasim.localAppAuth')
+              }}</span>
+            </label>
           </div>
         </div>
 
@@ -523,6 +545,165 @@
           </div>
         </div>
 
+        <!-- Mirasim Email Verification Code Flow -->
+        <div v-if="inputMethod === 'email_code'" class="space-y-4">
+          <div
+            class="rounded-lg border border-indigo-300 bg-white/80 p-4 dark:border-indigo-600 dark:bg-gray-800/80"
+          >
+            <p class="mb-3 text-sm text-indigo-700 dark:text-indigo-300">
+              {{ t('admin.accounts.oauth.mirasim.emailCodeDesc') }}
+            </p>
+
+            <!-- Email Input + Send Code Button -->
+            <div class="mb-4">
+              <label class="mb-2 flex items-center gap-2 text-sm font-semibold text-gray-700 dark:text-gray-300">
+                <Icon name="user" size="sm" class="text-indigo-500" />
+                {{ t('admin.accounts.oauth.mirasim.emailInputLabel') }}
+              </label>
+              <div class="flex gap-2">
+                <input
+                  v-model="mirasimEmailInput"
+                  type="email"
+                  class="input flex-1 font-mono text-sm"
+                  :placeholder="t('admin.accounts.oauth.mirasim.emailPlaceholder')"
+                  autocomplete="email"
+                  :disabled="loading"
+                />
+                <button
+                  type="button"
+                  class="btn btn-secondary shrink-0"
+                  :disabled="loading || !mirasimEmailInput.trim()"
+                  @click="handleMirasimSendCode"
+                >
+                  <Icon name="sparkles" size="sm" class="mr-1" />
+                  {{ emailCodeSent ? t('admin.accounts.oauth.mirasim.resendCode') : t('admin.accounts.oauth.mirasim.sendCode') }}
+                </button>
+              </div>
+            </div>
+
+            <!-- Dev mode / Testing Code Notice -->
+            <div
+              v-if="emailCodeNotice"
+              class="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-3 dark:border-amber-700 dark:bg-amber-900/30"
+            >
+              <p class="text-xs text-amber-800 dark:text-amber-300">
+                {{ emailCodeNotice }}
+              </p>
+            </div>
+
+            <!-- Verification Code Input -->
+            <div v-if="emailCodeSent" class="mb-4">
+              <label class="mb-2 flex items-center gap-2 text-sm font-semibold text-gray-700 dark:text-gray-300">
+                <Icon name="key" size="sm" class="text-indigo-500" />
+                {{ t('admin.accounts.oauth.mirasim.codeInputLabel') }}
+              </label>
+              <input
+                v-model="mirasimCodeInput"
+                type="text"
+                class="input w-full font-mono text-sm tracking-widest"
+                :placeholder="t('admin.accounts.oauth.mirasim.codePlaceholder')"
+                autocomplete="one-time-code"
+                maxlength="8"
+                :disabled="loading"
+              />
+              <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                {{ t('admin.accounts.oauth.mirasim.codeHint') }}
+              </p>
+            </div>
+
+            <!-- Error message -->
+            <div
+              v-if="error"
+              class="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 dark:border-red-700 dark:bg-red-900/30"
+            >
+              <p class="whitespace-pre-line text-sm text-red-600 dark:text-red-400">
+                {{ error }}
+              </p>
+            </div>
+
+            <!-- Verify Code Button -->
+            <button
+              v-if="emailCodeSent"
+              type="button"
+              class="btn btn-primary w-full"
+              :disabled="loading || !mirasimCodeInput.trim() || !mirasimEmailInput.trim()"
+              @click="handleMirasimVerifyCode"
+            >
+              <svg
+                v-if="loading"
+                class="-ml-1 mr-2 h-4 w-4 animate-spin"
+                fill="none"
+                viewBox="0 0 24 24"
+              >
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+              </svg>
+              <Icon v-else name="check" size="sm" class="mr-2" />
+              {{ loading ? t('admin.accounts.oauth.mirasim.verifying') : t('admin.accounts.oauth.mirasim.verifyAndLogin') }}
+            </button>
+          </div>
+        </div>
+
+        <!-- Mirasim Local App One-Click Import -->
+        <div v-if="inputMethod === 'local_app'" class="space-y-4">
+          <div
+            class="rounded-lg border border-indigo-300 bg-white/80 p-4 dark:border-indigo-600 dark:bg-gray-800/80"
+          >
+            <div class="mb-4 flex items-center gap-3">
+              <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-indigo-100 text-indigo-700 dark:bg-indigo-900/50 dark:text-indigo-300">
+                <PlatformIcon platform="mirasim" size="md" />
+              </div>
+              <div>
+                <h4 class="text-sm font-semibold text-gray-900 dark:text-white">
+                  {{ t('admin.accounts.oauth.mirasim.localAppTitle') }}
+                </h4>
+                <p class="text-xs text-gray-500 dark:text-gray-400">
+                  {{ t('admin.accounts.oauth.mirasim.localAppDesc') }}
+                </p>
+              </div>
+            </div>
+
+            <div class="mb-4 rounded-lg bg-gray-50 p-3 dark:bg-dark-700/50">
+              <p class="text-xs text-gray-600 dark:text-gray-300">
+                {{ t('admin.accounts.oauth.mirasim.localAppPathsHint') }}
+              </p>
+              <ul class="mt-1 list-inside list-disc text-xs font-mono text-gray-500 dark:text-gray-400">
+                <li>~/.mirasim/setting.json (auth.token, device.privateKey)</li>
+                <li>~/.mirasim/device.json (deviceId)</li>
+              </ul>
+            </div>
+
+            <!-- Error message -->
+            <div
+              v-if="error"
+              class="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 dark:border-red-700 dark:bg-red-900/30"
+            >
+              <p class="whitespace-pre-line text-sm text-red-600 dark:text-red-400">
+                {{ error }}
+              </p>
+            </div>
+
+            <button
+              type="button"
+              class="btn btn-primary w-full"
+              :disabled="loading"
+              @click="handleMirasimImportLocalApp"
+            >
+              <svg
+                v-if="loading"
+                class="-ml-1 mr-2 h-4 w-4 animate-spin"
+                fill="none"
+                viewBox="0 0 24 24"
+              >
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+              </svg>
+              <Icon v-else name="download" size="sm" class="mr-2" />
+              {{ loading ? t('admin.accounts.oauth.mirasim.importing') : t('admin.accounts.oauth.mirasim.importLocalBtn') }}
+            </button>
+          </div>
+        </div>
+
         <!-- Cookie Auto-Auth Form -->
         <div v-if="inputMethod === 'cookie'" class="space-y-4">
           <div
@@ -699,6 +880,45 @@
                   <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
                     {{ t('admin.accounts.oauth.gemini.projectIdHint') }}
                   </p>
+                </div>
+
+                <!-- Mirasim OAuth Provider 选择 (GitHub / Google) -->
+                <div v-if="platform === 'mirasim'" class="mb-3">
+                  <label class="input-label mb-1.5 block">
+                    {{ t('admin.accounts.oauth.mirasim.providerLabel') }}
+                  </label>
+                  <div class="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      :disabled="loading || !!authUrl"
+                      @click="handleSelectMirasimProvider('github')"
+                      :class="[
+                        'flex items-center justify-center gap-2 rounded-lg border px-3 py-2 text-xs font-medium transition-all',
+                        mirasimProvider === 'github'
+                          ? 'border-blue-500 bg-blue-50 text-blue-700 shadow-sm dark:border-blue-400 dark:bg-blue-900/30 dark:text-blue-300'
+                          : 'border-gray-200 bg-white text-gray-700 hover:border-gray-300 dark:border-dark-600 dark:bg-dark-700 dark:text-gray-300 dark:hover:border-dark-500',
+                        loading || !!authUrl ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'
+                      ]"
+                    >
+                      <GitHubMark class="h-4 w-4 shrink-0 text-gray-800 dark:text-gray-100" />
+                      <span>{{ t('admin.accounts.oauth.mirasim.providerGithub') }}</span>
+                    </button>
+                    <button
+                      type="button"
+                      :disabled="loading || !!authUrl"
+                      @click="handleSelectMirasimProvider('google')"
+                      :class="[
+                        'flex items-center justify-center gap-2 rounded-lg border px-3 py-2 text-xs font-medium transition-all',
+                        mirasimProvider === 'google'
+                          ? 'border-blue-500 bg-blue-50 text-blue-700 shadow-sm dark:border-blue-400 dark:bg-blue-900/30 dark:text-blue-300'
+                          : 'border-gray-200 bg-white text-gray-700 hover:border-gray-300 dark:border-dark-600 dark:bg-dark-700 dark:text-gray-300 dark:hover:border-dark-500',
+                        loading || !!authUrl ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'
+                      ]"
+                    >
+                      <GoogleMark class="h-4 w-4 shrink-0" />
+                      <span>{{ t('admin.accounts.oauth.mirasim.providerGoogle') }}</span>
+                    </button>
+                  </div>
                 </div>
                 <button
                   v-if="!authUrl"
@@ -898,6 +1118,9 @@ import { ref, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useClipboard } from '@/composables/useClipboard'
 import Icon from '@/components/icons/Icon.vue'
+import PlatformIcon from '@/components/common/PlatformIcon.vue'
+import GitHubMark from '@/components/auth/GitHubMark.vue'
+import GoogleMark from '@/components/auth/GoogleMark.vue'
 import type { AddMethod, AuthInputMethod } from '@/composables/useAccountOAuth'
 import type { AccountPlatform } from '@/types'
 import { adminAPI } from '@/api/admin'
@@ -923,8 +1146,16 @@ interface Props {
   showSsoOption?: boolean
   /** Grok email----password login (admin; password never persisted). */
   showEmailPasswordOption?: boolean
+  /** Mirasim 邮箱验证码登录选项 */
+  showEmailCodeOption?: boolean
+  /** Mirasim 本机客户端凭据一键导入选项 (~/.mirasim) */
+  showLocalAppOption?: boolean
+  emailCodeSent?: boolean
+  emailCodeNotice?: string
   showManualOption?: boolean
   initialInputMethod?: AuthInputMethod
+  /** Mirasim OAuth 认证源初始值（github 或 google） */
+  initialMirasimProvider?: 'github' | 'google'
   /**
    * Prefill for Grok email----password reauth. Password is never stored;
    * pass only the email (or "email----") so the operator types the password.
@@ -953,8 +1184,13 @@ const props = withDefaults(defineProps<Props>(), {
   showCodexPatOption: false,
   showSsoOption: false,
   showEmailPasswordOption: false,
+  showEmailCodeOption: false,
+  showLocalAppOption: false,
+  emailCodeSent: false,
+  emailCodeNotice: '',
   showManualOption: true,
   initialInputMethod: 'manual',
+  initialMirasimProvider: 'github',
   initialEmailPassword: '',
   platform: 'anthropic',
   showProjectId: true
@@ -972,6 +1208,9 @@ const emit = defineEmits<{
   'import-codex-pat': [accessToken: string]
   'import-sso': [content: string]
   'authorize-password': [emailPasswordInput: string]
+  'send-email-code': [email: string]
+  'verify-email-code': [payload: { email: string; code: string }]
+  'import-local-app': []
   'update:inputMethod': [method: AuthInputMethod]
 }>()
 
@@ -981,7 +1220,9 @@ const emailPasswordOptionEnabled = computed(
   () => props.showEmailPasswordOption && props.platform === 'grok' && passwordAuthEnabled.value
 )
 
-const showLocalCallbackNotice = computed(() => props.platform === 'openai' || props.platform === 'grok')
+const showLocalCallbackNotice = computed(
+  () => props.platform === 'openai' || props.platform === 'grok' || props.platform === 'mirasim'
+)
 
 // Get translation key based on platform
 const getOAuthKey = (key: string) => {
@@ -989,6 +1230,7 @@ const getOAuthKey = (key: string) => {
   if (props.platform === 'gemini') return `admin.accounts.oauth.gemini.${key}`
   if (props.platform === 'antigravity') return `admin.accounts.oauth.antigravity.${key}`
   if (props.platform === 'grok') return `admin.accounts.oauth.grok.${key}`
+  if (props.platform === 'mirasim') return `admin.accounts.oauth.mirasim.${key}`
   return `admin.accounts.oauth.${key}`
 }
 
@@ -1008,6 +1250,7 @@ const oauthImportantNotice = computed(() => {
   if (props.platform === 'openai') return t('admin.accounts.oauth.openai.importantNotice')
   if (props.platform === 'antigravity') return t('admin.accounts.oauth.antigravity.importantNotice')
   if (props.platform === 'grok') return t('admin.accounts.oauth.grok.importantNotice')
+  if (props.platform === 'mirasim') return t('admin.accounts.oauth.mirasim.importantNotice')
   return ''
 })
 
@@ -1022,9 +1265,21 @@ const codexSessionInput = ref('')
 const codexPATInput = ref('')
 const ssoCookieInput = ref('')
 const emailPasswordInput = ref(props.initialEmailPassword || '')
+const mirasimEmailInput = ref('')
+const mirasimCodeInput = ref('')
+const mirasimProvider = ref<'github' | 'google'>(props.initialMirasimProvider || 'github')
 const showHelpDialog = ref(false)
 const oauthState = ref('')
 const projectId = ref('')
+
+watch(
+  () => props.initialMirasimProvider,
+  (newVal) => {
+    if (newVal) {
+      mirasimProvider.value = newVal
+    }
+  }
+)
 
 watch(
   () => [props.platform, props.showEmailPasswordOption] as const,
@@ -1057,6 +1312,8 @@ const methodOptionCount = computed(() => [
   props.showAgentIdentityOption,
   props.showCodexPatOption,
   props.showSsoOption,
+  props.showEmailCodeOption,
+  props.showLocalAppOption,
   emailPasswordOptionEnabled.value
 ].filter(Boolean).length)
 const showMethodSelection = computed(() => methodOptionCount.value > 1)
@@ -1129,10 +1386,10 @@ watch(inputMethod, (newVal) => {
   emit('update:inputMethod', newVal)
 })
 
-// Auto-extract code from callback URL (OpenAI/Gemini/Antigravity/Grok)
+// Auto-extract code from callback URL (OpenAI/Gemini/Antigravity/Grok/Mirasim)
 // e.g., http://localhost:8085/callback?code=xxx...&state=...
 watch(authCodeInput, (newVal) => {
-  if (props.platform !== 'openai' && props.platform !== 'gemini' && props.platform !== 'antigravity' && props.platform !== 'grok') return
+  if (props.platform !== 'openai' && props.platform !== 'gemini' && props.platform !== 'antigravity' && props.platform !== 'grok' && props.platform !== 'mirasim') return
 
   const trimmed = newVal.trim()
   // Check if it looks like a URL with code parameter
@@ -1142,7 +1399,7 @@ watch(authCodeInput, (newVal) => {
       const url = trimmed.includes('?') ? new URL(trimmed) : new URL(`http://localhost/callback?${trimmed.replace(/^\?/, '')}`)
       const code = url.searchParams.get('code')
       const stateParam = url.searchParams.get('state')
-      if ((props.platform === 'openai' || props.platform === 'gemini' || props.platform === 'antigravity' || props.platform === 'grok') && stateParam) {
+      if ((props.platform === 'openai' || props.platform === 'gemini' || props.platform === 'antigravity' || props.platform === 'grok' || props.platform === 'mirasim') && stateParam) {
         oauthState.value = stateParam
       }
       if (code && code !== trimmed) {
@@ -1153,7 +1410,7 @@ watch(authCodeInput, (newVal) => {
       // If URL parsing fails, try regex extraction
       const match = trimmed.match(/[?&]code=([^&]+)/)
       const stateMatch = trimmed.match(/[?&]state=([^&]+)/)
-      if ((props.platform === 'openai' || props.platform === 'gemini' || props.platform === 'antigravity' || props.platform === 'grok') && stateMatch && stateMatch[1]) {
+      if ((props.platform === 'openai' || props.platform === 'gemini' || props.platform === 'antigravity' || props.platform === 'grok' || props.platform === 'mirasim') && stateMatch && stateMatch[1]) {
         oauthState.value = stateMatch[1]
       }
       if (match && match[1] && match[1] !== trimmed) {
@@ -1213,6 +1470,43 @@ const handleImportSSO = () => {
   }
 }
 
+/**
+ * 发送 Mirasim 邮箱验证码
+ */
+const handleMirasimSendCode = () => {
+  if (mirasimEmailInput.value.trim()) {
+    emit('send-email-code', mirasimEmailInput.value.trim())
+  }
+}
+
+/**
+ * 校验 Mirasim 邮箱验证码并完成授权登录
+ */
+const handleMirasimVerifyCode = () => {
+  if (mirasimEmailInput.value.trim() && mirasimCodeInput.value.trim()) {
+    emit('verify-email-code', {
+      email: mirasimEmailInput.value.trim(),
+      code: mirasimCodeInput.value.trim()
+    })
+  }
+}
+
+/**
+ * 从本机 Mirasim 客户端一键导入凭据
+ */
+const handleMirasimImportLocalApp = () => {
+  emit('import-local-app')
+}
+
+/**
+ * 切换 Mirasim OAuth 认证提供商（GitHub / Google）
+ * @param provider 目标提供商标识
+ */
+const handleSelectMirasimProvider = (provider: 'github' | 'google') => {
+  if (props.loading || props.authUrl) return
+  mirasimProvider.value = provider
+}
+
 // Expose methods and state
 defineExpose({
   authCode: authCodeInput,
@@ -1225,6 +1519,9 @@ defineExpose({
   codexPAT: codexPATInput,
   ssoCookie: ssoCookieInput,
   emailPassword: emailPasswordInput,
+  email: mirasimEmailInput,
+  emailCode: mirasimCodeInput,
+  mirasimProvider,
   inputMethod,
   reset: () => {
     authCodeInput.value = ''
@@ -1237,6 +1534,9 @@ defineExpose({
     codexPATInput.value = ''
     ssoCookieInput.value = ''
     emailPasswordInput.value = ''
+    mirasimEmailInput.value = ''
+    mirasimCodeInput.value = ''
+    mirasimProvider.value = props.initialMirasimProvider || 'github'
     inputMethod.value = props.initialInputMethod
     showHelpDialog.value = false
   }

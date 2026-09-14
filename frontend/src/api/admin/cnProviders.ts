@@ -5,9 +5,10 @@
 
 import { apiClient } from '../client'
 
-/** 滚动用量窗口档（5 小时 / 每周），对齐后端 service.CNQuotaTier。 */
+/** 滚动用量窗口档（5 小时 / 每周 / 每月 / Mirasim 扩展窗口），对齐后端 service.CNQuotaTier。 */
 export interface CNQuotaTier {
-  window: '5h' | 'weekly' | 'monthly'
+  /** 标准窗口为 '5h' | 'weekly' | 'monthly'；Mirasim 另有 '7d' | '7d_claude' | '7d_fable' 等扩展窗口。 */
+  window: string
   used_percent: number
   reset_at?: string
 }

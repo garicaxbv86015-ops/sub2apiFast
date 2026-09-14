@@ -131,8 +131,8 @@ func (s *CNProviderQuotaService) QueryUsageForAccount(ctx context.Context, accou
 
 func (s *CNProviderQuotaService) queryUsageForAccount(ctx context.Context, account *Account) (*CNProviderQuotaProbeResult, error) {
 	provider := account.GetCodingPlanProvider()
-	if provider != PlatformKimi && provider != PlatformZhipu && provider != PlatformMiniMax && provider != PlatformOpenCodeGo {
-		return nil, infraerrors.New(http.StatusBadRequest, "CN_QUOTA_NOT_CODING_PLAN", "account is not a kimi/zhipu/minimax coding plan or opencode go account")
+	if provider != PlatformKimi && provider != PlatformZhipu && provider != PlatformMiniMax && provider != PlatformOpenCodeGo && provider != PlatformMirasim {
+		return nil, infraerrors.New(http.StatusBadRequest, "CN_QUOTA_NOT_CODING_PLAN", "account is not a kimi/zhipu/minimax coding plan, opencode go or mirasim account")
 	}
 
 	apiKey := strings.TrimSpace(account.GetCNAPIKey())
@@ -140,6 +140,31 @@ func (s *CNProviderQuotaService) queryUsageForAccount(ctx context.Context, accou
 		return nil, infraerrors.New(http.StatusBadRequest, "CN_QUOTA_NO_APIKEY", "account api_key is empty")
 	}
 
+	// Mirasim 走 OAuth token + 设备签名：探测前若 access_token 已过期/临期，
+	// 先用 refresh_token 刷新并落库，避免拿过期 token 触发上游 401。
+	if provider == PlatformMirasim {
+		s.ensureMirasimTokenFresh(ctx, account)
+	}
+
+	result, err := s.doQuotaProbe(ctx, account, provider)
+	if err != nil {
+		return nil, err
+	}
+	// 401/403 时对 Mirasim 再尝试一次「刷新 token + 重放探测」：
+	// 覆盖 token 在探测途中过期、或 ensureMirasimTokenFresh 失败但 refresh_token 仍可用的场景。
+	if provider == PlatformMirasim && !result.CredentialValid {
+		if s.refreshMirasimToken(ctx, account) == nil {
+			if retry, rerr := s.doQuotaProbe(ctx, account, provider); rerr == nil {
+				return retry, nil
+			}
+		}
+	}
+	return result, nil
+}
+
+// doQuotaProbe 执行一次配额探测 HTTP 请求并解析响应。
+func (s *CNProviderQuotaService) doQuotaProbe(ctx context.Context, account *Account, provider string) (*CNProviderQuotaProbeResult, error) {
+	apiKey := strings.TrimSpace(account.GetCNAPIKey())
 	baseURL := account.GetOpenAIBaseURL()
 	var (
 		targetURL  string
@@ -153,6 +178,18 @@ func (s *CNProviderQuotaService) queryUsageForAccount(ctx context.Context, accou
 	case PlatformOpenCodeGo:
 		targetURL = openCodeGoQuotaURL(baseURL)
 		authHeader = "Bearer " + apiKey
+	case PlatformMirasim:
+		targetURL = mirasimQuotaURL(baseURL)
+		cred := strings.TrimSpace(account.GetMirasimIssuerToken())
+		if cred == "" {
+			cred = apiKey
+		}
+		if account.GetMirasimPrivateKey() != "" {
+			if ticket, err := GetMirasimTicketManager().GetOrMintTicket(ctx, account, baseURL); err == nil && ticket != "" {
+				cred = ticket
+			}
+		}
+		authHeader = "Bearer " + cred
 	case PlatformZhipu:
 		targetURL = zhipuQuotaURL(baseURL)
 		authHeader = apiKey // 智谱额度端点鉴权不加 Bearer 前缀
@@ -185,6 +222,11 @@ func (s *CNProviderQuotaService) queryUsageForAccount(ctx context.Context, accou
 	}
 	req.Header.Set("Authorization", authHeader)
 	req.Header.Set("Accept", "application/json")
+	if provider == PlatformMirasim {
+		req.Header.Set("x-mirasim-probe", "usage")
+		cred := strings.TrimPrefix(authHeader, "Bearer ")
+		_ = SignMirasimRelayRequest(callCtx, account, req, nil, cred)
+	}
 	if provider == PlatformZhipu || provider == PlatformMiniMax {
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Accept-Language", "en-US,en")
@@ -242,6 +284,9 @@ func (s *CNProviderQuotaService) queryUsageForAccount(ctx context.Context, accou
 	case PlatformOpenCodeGo:
 		tiers = parseOpenCodeGoUsageTiers(bodyBytes)
 		result.PlanLevel = "OpenCode Go"
+	case PlatformMirasim:
+		tiers = parseMirasimUsageTiers(bodyBytes)
+		result.PlanLevel = "Mirasim Plan"
 	case PlatformZhipu:
 		tiers = parseZhipuTokenTiers(gjson.GetBytes(bodyBytes, "data"))
 		result.PlanLevel = strings.TrimSpace(gjson.GetBytes(bodyBytes, "data.level").String())
@@ -270,6 +315,44 @@ func (s *CNProviderQuotaService) queryUsageForAccount(ctx context.Context, accou
 	return result, nil
 }
 
+// mirasimRefreshLeeway 是主动刷新 Mirasim access token 的提前量。
+// 上游 access token TTL 约 1 小时，提前 2 分钟刷新可避免探测/转发途中过期。
+const mirasimRefreshLeeway = 2 * time.Minute
+
+// ensureMirasimTokenFresh 探测前主动刷新已过期的 Mirasim access token。
+// 失败不阻断探测（refresh_token 可能临时不可用），返回后由 401 重试路径兜底。
+func (s *CNProviderQuotaService) ensureMirasimTokenFresh(ctx context.Context, account *Account) {
+	expiresAt := account.GetCredentialAsTime("expires_at")
+	if expiresAt == nil || time.Until(*expiresAt) > mirasimRefreshLeeway {
+		return
+	}
+	if err := s.refreshMirasimToken(ctx, account); err != nil {
+		slog.Warn("mirasim_token_proactive_refresh_failed", "account_id", account.ID, "error", err)
+	}
+}
+
+// refreshMirasimToken 使用 refresh_token 调 /auth/refresh 换新 token，合并凭据并落库。
+// 成功后同步更新 account.Credentials（含 expires_at / api_key / issuer_token / refresh_token），
+// 供同一次探测或后续转发直接使用最新 token。
+func (s *CNProviderQuotaService) refreshMirasimToken(ctx context.Context, account *Account) error {
+	if account == nil || !account.IsMirasim() {
+		return fmt.Errorf("not a mirasim account")
+	}
+	if strings.TrimSpace(account.GetCredential("refresh_token")) == "" {
+		return fmt.Errorf("no refresh_token")
+	}
+	oauthSvc := NewMirasimOAuthService(s.proxyRepo, s.cfg)
+	tokenInfo, err := oauthSvc.RefreshAccountToken(ctx, account)
+	if err != nil {
+		return err
+	}
+	newCreds := MergeCredentials(account.Credentials, oauthSvc.BuildAccountCredentials(tokenInfo))
+	if err := persistAccountCredentials(ctx, s.accountRepo, account, newCreds); err != nil {
+		return fmt.Errorf("persist refreshed mirasim credentials: %w", err)
+	}
+	return nil
+}
+
 func (s *CNProviderQuotaService) loadCodingPlanAccount(ctx context.Context, accountID int64) (*Account, error) {
 	account, err := s.accountRepo.GetByID(ctx, accountID)
 	if err != nil {
@@ -287,7 +370,7 @@ func validateCodingPlanAccount(account *Account) error {
 	if account == nil {
 		return infraerrors.New(http.StatusNotFound, "CN_QUOTA_ACCOUNT_NOT_FOUND", "account not found")
 	}
-	if account.IsOpenCodeGoPlan() {
+	if account.IsOpenCodeGoPlan() || account.IsMirasim() {
 		return nil
 	}
 	if account.IsOpenCodeGo() {
@@ -612,6 +695,8 @@ func parseZhipuTokenTiers(data gjson.Result) []CNQuotaTier {
 }
 
 // cnQuotaExtraUpdates 根据 tier 列表构造 provider 维度的 Extra 快照更新。
+// 标准窗口（5h/weekly/monthly）落固定键；Mirasim 的 7d/7d_claude/7d_fable 等
+// 窗口按 window 名透传落 <provider>_<window>_used_percent/_reset_at，供前端按名渲染。
 func cnQuotaExtraUpdates(provider string, tiers []CNQuotaTier, now time.Time) map[string]any {
 	updates := map[string]any{
 		cnExtraKey(provider, cnExtraSuffixUsageUpdated): now.Format(time.RFC3339),
@@ -633,9 +718,33 @@ func cnQuotaExtraUpdates(provider string, tiers []CNQuotaTier, now time.Time) ma
 			if t.ResetAt != "" {
 				updates[cnExtraKey(provider, cnExtraSuffixMonthlyReset)] = t.ResetAt
 			}
+		default:
+			// Mirasim 扩展窗口（7d / 7d_claude / 7d_fable ...）：按 window 名落快照。
+			if key, ok := cnQuotaWindowSnapshotKey(t.Window); ok {
+				updates[cnExtraKey(provider, key+"_used_percent")] = t.UsedPercent
+				if t.ResetAt != "" {
+					updates[cnExtraKey(provider, key+"_reset_at")] = t.ResetAt
+				}
+			}
 		}
 	}
 	return updates
+}
+
+// cnQuotaWindowSnapshotKey 校验扩展 window 名是否可安全用作 extra 键后缀。
+// 仅允许小写字母数字与下划线（Mirasim 的 7d/7d_claude/7d_fable 均满足），
+// 避免上游注入非法键名污染 account.Extra。
+func cnQuotaWindowSnapshotKey(window string) (string, bool) {
+	w := strings.TrimSpace(strings.ToLower(window))
+	if w == "" || len(w) > 32 {
+		return "", false
+	}
+	for _, r := range w {
+		if (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '_' {
+			return "", false
+		}
+	}
+	return w, true
 }
 
 // parseOpenCodeGoUsageTiers 解析 OpenCode Go GET /usage 响应。

@@ -228,6 +228,19 @@
             <PlatformIcon platform="opencode_go" size="sm" />
             OpenCode
           </button>
+          <button
+            type="button"
+            @click="selectMirasimPlatform()"
+            :class="[
+              'flex flex-1 items-center justify-center gap-2 rounded-md px-3 py-2.5 text-sm font-medium transition-all',
+              form.platform === 'mirasim'
+                ? 'bg-white text-indigo-700 shadow-sm dark:bg-dark-600 dark:text-indigo-300'
+                : 'text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-200'
+            ]"
+          >
+            <PlatformIcon platform="mirasim" size="sm" />
+            Mirasim
+          </button>
         </div>
       </div>
 
@@ -474,6 +487,66 @@
             <div>
               <span class="block text-sm font-medium text-gray-900 dark:text-white">API Key</span>
               <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.accounts.types.responsesApi') }}</span>
+            </div>
+          </button>
+        </div>
+      </div>
+
+      <!-- Mirasim Account Type Selection (OAuth vs API Key) -->
+      <div v-if="isMirasimPlatform">
+        <label class="input-label">{{ t('admin.accounts.accountType') }}</label>
+        <div class="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <button
+            type="button"
+            data-testid="mirasim-account-type-oauth"
+            @click="accountCategory = 'oauth-based'"
+            :class="[
+              'flex items-center gap-3 rounded-lg border-2 p-3 text-left transition-all',
+              accountCategory === 'oauth-based'
+                ? 'border-indigo-600 bg-indigo-50 dark:border-indigo-500 dark:bg-indigo-900/20'
+                : 'border-gray-200 hover:border-indigo-300 dark:border-dark-600 dark:hover:border-indigo-700'
+            ]"
+          >
+            <div
+              :class="[
+                'flex h-8 w-8 shrink-0 items-center justify-center rounded-lg',
+                accountCategory === 'oauth-based'
+                  ? 'bg-indigo-600 text-white'
+                  : 'bg-gray-100 text-gray-500 dark:bg-dark-600 dark:text-gray-400'
+              ]"
+            >
+              <PlatformIcon platform="mirasim" size="sm" />
+            </div>
+            <div>
+              <span class="block text-sm font-medium text-gray-900 dark:text-white">OAuth</span>
+              <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.accounts.types.mirasimOauth') }}</span>
+            </div>
+          </button>
+
+          <button
+            type="button"
+            data-testid="mirasim-account-type-api-key"
+            @click="accountCategory = 'apikey'"
+            :class="[
+              'flex items-center gap-3 rounded-lg border-2 p-3 text-left transition-all',
+              accountCategory === 'apikey'
+                ? 'border-indigo-600 bg-indigo-50 dark:border-indigo-500 dark:bg-indigo-900/20'
+                : 'border-gray-200 hover:border-indigo-300 dark:border-dark-600 dark:hover:border-indigo-700'
+            ]"
+          >
+            <div
+              :class="[
+                'flex h-8 w-8 shrink-0 items-center justify-center rounded-lg',
+                accountCategory === 'apikey'
+                  ? 'bg-indigo-600 text-white'
+                  : 'bg-gray-100 text-gray-500 dark:bg-dark-600 dark:text-gray-400'
+              ]"
+            >
+              <Icon name="key" size="sm" />
+            </div>
+            <div>
+              <span class="block text-sm font-medium text-gray-900 dark:text-white">API Key</span>
+              <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.accounts.types.mirasimManual') }}</span>
             </div>
           </button>
         </div>
@@ -1407,8 +1480,12 @@
           v-model:rows="openCodeGoProtocolRules"
           :plan="openCodeAccountMode"
         />
+        <MirasimProtocolRulesEditor
+          v-if="isMirasimPlatform && apiProtocol === 'adaptive'"
+          v-model:rows="mirasimProtocolRules"
+        />
         <div>
-          <label class="input-label">{{ t('admin.accounts.apiKeyRequired') }}</label>
+          <label class="input-label">{{ isMirasimPlatform ? t('admin.accounts.mirasim.apiKeyLabel') : t('admin.accounts.apiKeyRequired') }}</label>
           <input
             v-model="apiKeyValue"
             type="password"
@@ -1417,6 +1494,29 @@
             :placeholder="apiKeyValuePlaceholder"
           />
           <p v-if="apiKeyHint" class="input-hint">{{ apiKeyHint }}</p>
+        </div>
+
+        <!-- Mirasim 设备私钥与设备 ID（可选，用于自动签署设备票据） -->
+        <div v-if="isMirasimPlatform" class="space-y-3 rounded-lg border border-gray-200 bg-gray-50/60 p-3 dark:border-dark-600 dark:bg-dark-800/40">
+          <div>
+            <label class="input-label mb-1">{{ t('admin.accounts.mirasim.deviceId') }}</label>
+            <input
+              v-model="mirasimDeviceId"
+              type="text"
+              class="input font-mono text-sm"
+              :placeholder="t('admin.accounts.mirasim.deviceIdPlaceholder')"
+            />
+          </div>
+          <div>
+            <label class="input-label mb-1">{{ t('admin.accounts.mirasim.privateKey') }}</label>
+            <input
+              v-model="mirasimPrivateKey"
+              type="password"
+              class="input font-mono text-sm"
+              :placeholder="t('admin.accounts.mirasim.privateKeyPlaceholder')"
+            />
+          </div>
+          <p class="input-hint">{{ t('admin.accounts.mirasim.deviceHint') }}</p>
         </div>
 
         <!-- 上游倍率自动探测：全部 API-key 平台可用（所在区块已限定 apikey 类型） -->
@@ -2295,6 +2395,16 @@
             @update:rows="headerOverrideRows = $event"
           />
         </div>
+      </div>
+
+      <!-- Mirasim OAuth Protocol Rules (OAuth 类型独立展示自适应分流规则) -->
+      <div
+        v-if="isMirasimPlatform && isOAuthFlow"
+        class="border-t border-gray-200 pt-4 dark:border-dark-600"
+      >
+        <MirasimProtocolRulesEditor
+          v-model:rows="mirasimProtocolRules"
+        />
       </div>
 
       <!-- OpenAI OAuth Model Mapping (OAuth 类型没有 apikey 容器，需要独立的模型映射区域) -->
@@ -3544,10 +3654,10 @@
         :loading="currentOAuthLoading"
         :error="currentOAuthError"
         :show-help="form.platform === 'anthropic'"
-        :show-proxy-warning="form.platform !== 'openai' && form.platform !== 'grok' && !!form.proxy_id"
+        :show-proxy-warning="form.platform !== 'openai' && form.platform !== 'grok' && form.platform !== 'mirasim' && !!form.proxy_id"
         :allow-multiple="form.platform === 'anthropic'"
         :show-cookie-option="form.platform === 'anthropic'"
-        :show-refresh-token-option="form.platform === 'openai' || form.platform === 'antigravity' || form.platform === 'grok'"
+        :show-refresh-token-option="form.platform === 'openai' || form.platform === 'antigravity' || form.platform === 'grok' || form.platform === 'mirasim'"
         :show-mobile-refresh-token-option="form.platform === 'openai'"
         :show-session-token-option="false"
         :show-access-token-option="false"
@@ -3556,6 +3666,10 @@
         :show-codex-pat-option="form.platform === 'openai'"
         :show-sso-option="form.platform === 'grok'"
         :show-email-password-option="false"
+        :show-email-code-option="form.platform === 'mirasim'"
+        :show-local-app-option="form.platform === 'mirasim'"
+        :email-code-sent="mirasimOAuth.emailCodeSent.value"
+        :email-code-notice="mirasimOAuth.devCode.value ? t('admin.accounts.oauth.mirasim.devCodeNotice', { code: mirasimOAuth.devCode.value }) : ''"
         :show-manual-option="true"
         :initial-input-method="'manual'"
         :platform="form.platform"
@@ -3569,6 +3683,9 @@
         @import-codex-pat="handleOpenAIImportCodexPAT"
         @import-sso="handleGrokImportSSO"
         @authorize-password="handleGrokAuthorizePassword"
+        @send-email-code="handleMirasimSendEmailCode"
+        @verify-email-code="handleMirasimVerifyEmailCode"
+        @import-local-app="handleMirasimImportLocalApp"
       />
 
     </div>
@@ -3910,6 +4027,7 @@ import { useOpenAIOAuth } from '@/composables/useOpenAIOAuth'
 import { useGeminiOAuth } from '@/composables/useGeminiOAuth'
 import { useAntigravityOAuth } from '@/composables/useAntigravityOAuth'
 import { useGrokOAuth } from '@/composables/useGrokOAuth'
+import { useMirasimOAuth } from '@/composables/useMirasimOAuth'
 import type {
   Proxy,
   AdminGroup,
@@ -3938,13 +4056,17 @@ import Toggle from '@/components/common/Toggle.vue'
 import GrokBaseUrlPresets from '@/components/account/GrokBaseUrlPresets.vue'
 import CnBaseUrlPresets from '@/components/account/CnBaseUrlPresets.vue'
 import OpenCodeGoProtocolRulesEditor from '@/components/account/OpenCodeGoProtocolRulesEditor.vue'
+import MirasimProtocolRulesEditor from '@/components/account/MirasimProtocolRulesEditor.vue'
 import HeaderOverrideEditor from '@/components/account/HeaderOverrideEditor.vue'
 import { allSelectedGroupsEnableLongContextPricing } from '@/components/account/longContextBilling'
 import {
+  MIRASIM_BASE_URL,
   applyAntigravityProjectID,
   applyHeaderOverride,
   applyInterceptWarmup,
+  applyMirasimProtocolRules,
   applyOpenCodeGoProtocolRules,
+  cloneMirasimProtocolRules,
   cloneOpenCodeGoProtocolRules,
   cnSupportsNativeResponses,
   defaultCNAdaptiveBaseUrls,
@@ -3958,6 +4080,7 @@ import {
   type CnNativeApiProtocol,
   type CnProviderPlatform,
   type HeaderOverrideRow,
+  type MirasimProtocolRule,
   type OpenCodeAccountMode,
   type OpenCodeGoProtocolRule
 } from '@/components/account/credentialsBuilder'
@@ -3992,6 +4115,7 @@ interface OAuthFlowExposed {
   codexSession: string
   codexPAT: string
   ssoCookie: string
+  mirasimProvider?: 'github' | 'google'
   inputMethod: AuthInputMethod
   reset: () => void
 }
@@ -4026,6 +4150,7 @@ const baseUrlHint = computed(() => {
 const apiKeyHint = computed(() => {
   if (form.platform === 'openai') return t('admin.accounts.openai.apiKeyHint')
   if (form.platform === 'gemini') return t('admin.accounts.gemini.apiKeyHint')
+  if (form.platform === 'mirasim') return t('admin.accounts.mirasim.apiKeyHint')
   if (form.platform === 'grok') return ''
   return t('admin.accounts.apiKeyHint')
 })
@@ -4065,6 +4190,8 @@ const apiKeyValuePlaceholder = computed(() => {
     case 'minimax':
     case 'opencode_go':
       return 'sk-...'
+    case 'mirasim':
+      return 'ey...'
     default:
       return 'sk-ant-...'
   }
@@ -4094,6 +4221,7 @@ const openaiOAuth = useOpenAIOAuth() // For OpenAI OAuth
 const geminiOAuth = useGeminiOAuth() // For Gemini OAuth
 const antigravityOAuth = useAntigravityOAuth() // For Antigravity OAuth
 const grokOAuth = useGrokOAuth() // For Grok OAuth
+const mirasimOAuth = useMirasimOAuth() // For Mirasim OAuth
 
 // Computed: current OAuth state for template binding
 const currentAuthUrl = computed(() => {
@@ -4101,6 +4229,7 @@ const currentAuthUrl = computed(() => {
   if (form.platform === 'gemini') return geminiOAuth.authUrl.value
   if (form.platform === 'antigravity') return antigravityOAuth.authUrl.value
   if (form.platform === 'grok') return grokOAuth.authUrl.value
+  if (form.platform === 'mirasim') return mirasimOAuth.authUrl.value
   return oauth.authUrl.value
 })
 
@@ -4109,6 +4238,7 @@ const currentSessionId = computed(() => {
   if (form.platform === 'gemini') return geminiOAuth.sessionId.value
   if (form.platform === 'antigravity') return antigravityOAuth.sessionId.value
   if (form.platform === 'grok') return grokOAuth.sessionId.value
+  if (form.platform === 'mirasim') return mirasimOAuth.sessionId.value
   return oauth.sessionId.value
 })
 
@@ -4117,6 +4247,7 @@ const currentOAuthLoading = computed(() => {
   if (form.platform === 'gemini') return geminiOAuth.loading.value
   if (form.platform === 'antigravity') return antigravityOAuth.loading.value
   if (form.platform === 'grok') return grokOAuth.loading.value
+  if (form.platform === 'mirasim') return mirasimOAuth.loading.value
   return oauth.loading.value
 })
 
@@ -4125,6 +4256,7 @@ const currentOAuthError = computed(() => {
   if (form.platform === 'gemini') return geminiOAuth.error.value
   if (form.platform === 'antigravity') return antigravityOAuth.error.value
   if (form.platform === 'grok') return grokOAuth.error.value
+  if (form.platform === 'mirasim') return mirasimOAuth.error.value
   return oauth.error.value
 })
 
@@ -4162,6 +4294,10 @@ const apiProtocol = ref<CnApiProtocol>('adaptive')
 const openCodeGoProtocolRules = ref<OpenCodeGoProtocolRule[]>(
   cloneOpenCodeGoProtocolRules(defaultOpenCodeProtocolRules('zen'))
 )
+// Mirasim 模型协议自适应规则与设备认证私钥/设备ID
+const mirasimProtocolRules = ref<MirasimProtocolRule[]>(cloneMirasimProtocolRules())
+const mirasimDeviceId = ref('')
+const mirasimPrivateKey = ref('')
 // 智谱团队版 Coding Plan：组织/项目 ID，写入 credentials 供额度探测切换团队端点
 const zhipuOrganization = ref('')
 const zhipuProject = ref('')
@@ -4172,7 +4308,8 @@ const adaptiveBaseUrls = ref<Record<CnNativeApiProtocol, string>>({
 })
 const isCNPlatform = computed(() => isCNProviderPlatform(form.platform))
 const isOpenCodeGoPlatform = computed(() => form.platform === 'opencode_go')
-const isMultiProtocolPlatform = computed(() => isCNPlatform.value || isOpenCodeGoPlatform.value)
+const isMirasimPlatform = computed(() => form.platform === 'mirasim')
+const isMultiProtocolPlatform = computed(() => isCNPlatform.value || isOpenCodeGoPlatform.value || isMirasimPlatform.value)
 function currentOpenCodeOrCNMode(): CnAccountMode | OpenCodeAccountMode {
   return isOpenCodeGoPlatform.value ? openCodeAccountMode.value : accountMode.value
 }
@@ -4184,11 +4321,12 @@ const cnPresetPlatform = computed<CnProviderPlatform>(() => {
   }
   return 'kimi'
 })
-const adaptivePresetPlatform = computed<CnProviderPlatform | 'opencode_go'>(() => {
+const adaptivePresetPlatform = computed<CnProviderPlatform | 'opencode_go' | 'mirasim'>(() => {
   if (form.platform === 'opencode_go') return 'opencode_go'
+  if (form.platform === 'mirasim') return 'mirasim'
   return cnPresetPlatform.value
 })
-// 当前平台可选的协议档（responses 仅 deepseek / kimi）。
+// 当前平台可选的协议档（responses 仅 deepseek / kimi / opencode_go）。
 const cnProtocolOptions = computed<Array<{ value: CnApiProtocol; labelKey: string }>>(() => {
   const opts: Array<{ value: CnApiProtocol; labelKey: string }> = [
     { value: 'adaptive', labelKey: 'adaptive' },
@@ -4210,7 +4348,7 @@ const cnAdaptiveProtocolOptions = computed<Array<{ value: CnNativeApiProtocol; l
 })
 
 function resetAdaptiveBaseUrls(
-  platform: CnProviderPlatform | 'opencode_go',
+  platform: CnProviderPlatform | 'opencode_go' | 'mirasim',
   mode: CnAccountMode | OpenCodeAccountMode
 ) {
   adaptiveBaseUrls.value = defaultCNAdaptiveBaseUrls(platform, mode)
@@ -4228,6 +4366,8 @@ const cnAccentActiveClass = computed(() => {
       return 'border-rose-500 bg-rose-50 dark:bg-rose-900/20'
     case 'opencode_go':
       return 'border-amber-500 bg-amber-50 dark:bg-amber-900/20'
+    case 'mirasim':
+      return 'border-indigo-500 bg-indigo-50 dark:bg-indigo-900/20'
     default:
       return 'border-primary-500 bg-primary-50 dark:bg-primary-900/20'
   }
@@ -4244,6 +4384,8 @@ const cnAccentIconClass = computed(() => {
       return 'bg-rose-500 text-white'
     case 'opencode_go':
       return 'bg-amber-500 text-white'
+    case 'mirasim':
+      return 'bg-indigo-500 text-white'
     default:
       return 'bg-primary-500 text-white'
   }
@@ -4270,6 +4412,18 @@ function selectOpenCodeGoPlatform() {
   apiKeyBaseUrl.value = defaultCNBaseUrl('opencode_go', openCodeAccountMode.value, 'adaptive')
   resetAdaptiveBaseUrls('opencode_go', openCodeAccountMode.value)
   openCodeGoProtocolRules.value = cloneOpenCodeGoProtocolRules(defaultOpenCodeProtocolRules(openCodeAccountMode.value))
+}
+function selectMirasimPlatform() {
+  form.platform = 'mirasim'
+  form.type = 'oauth'
+  accountCategory.value = 'oauth-based'
+  addMethod.value = 'oauth'
+  apiProtocol.value = 'adaptive'
+  apiKeyBaseUrl.value = MIRASIM_BASE_URL
+  resetAdaptiveBaseUrls('mirasim', 'payg')
+  mirasimDeviceId.value = ''
+  mirasimPrivateKey.value = ''
+  mirasimProtocolRules.value = cloneMirasimProtocolRules()
 }
 // 账号类型 / 协议变更时同步默认 base url。
 watch(openCodeAccountMode, (mode, previousMode) => {
@@ -4770,6 +4924,9 @@ const canExchangeCode = computed(() => {
   if (form.platform === 'grok') {
     return authCode.trim() && grokOAuth.sessionId.value && !grokOAuth.loading.value
   }
+  if (form.platform === 'mirasim') {
+    return authCode.trim() && mirasimOAuth.sessionId.value && !mirasimOAuth.loading.value
+  }
   return authCode.trim() && oauth.sessionId.value && !oauth.loading.value
 })
 
@@ -4872,6 +5029,11 @@ watch(
       form.concurrency = 1
       form.load_factor = null
     }
+    if (newPlatform === 'mirasim') {
+      accountCategory.value = 'oauth-based'
+      addMethod.value = 'oauth'
+      modelRestrictionMode.value = 'mapping'
+    }
     if (newPlatform !== 'gemini' && newPlatform !== 'anthropic' && accountCategory.value === 'service_account') {
       accountCategory.value = 'oauth-based'
     }
@@ -4922,6 +5084,7 @@ watch(
     geminiOAuth.resetState()
     antigravityOAuth.resetState()
     grokOAuth.resetState()
+    mirasimOAuth.resetState()
   }
 )
 
@@ -5402,6 +5565,7 @@ const resetForm = () => {
   geminiOAuth.resetState()
   antigravityOAuth.resetState()
   grokOAuth.resetState()
+  mirasimOAuth.resetState()
   oauthFlowRef.value?.reset()
   antigravityMixedChannelConfirmed.value = false
   upstreamModelsPreviewed.value = false
@@ -5771,7 +5935,9 @@ const handleSubmit = async () => {
         ? 'https://generativelanguage.googleapis.com'
         : form.platform === 'grok'
           ? 'https://api.x.ai/v1'
-          : 'https://api.anthropic.com'
+          : form.platform === 'mirasim'
+            ? MIRASIM_BASE_URL
+            : 'https://api.anthropic.com'
 
   // Build credentials with optional model mapping
   const credentials: Record<string, unknown> = {
@@ -5782,15 +5948,15 @@ const handleSubmit = async () => {
     credentials.tier_id = geminiTierAIStudio.value
   }
 
-  // 国产供应商：账号模式 + 协议 + 对应端点写入凭据；后端按 account_mode 路由
+  // 国产供应商与多协议平台：账号模式 + 协议 + 对应端点写入凭据；后端按 account_mode 路由
   // 额度/余额探测，按 api_protocol 路由转发端点与格式。注意 CN apikey 走本函数
   // 的通用路径（直接 doCreateAccount），不经过 createAccountAndFinish。
-  if (isCNProviderPlatform(form.platform) || form.platform === 'opencode_go') {
+  if (isCNProviderPlatform(form.platform) || form.platform === 'opencode_go' || form.platform === 'mirasim') {
     credentials.account_mode = form.platform === 'opencode_go' ? openCodeAccountMode.value : accountMode.value
     credentials.api_protocol = apiProtocol.value
     if (apiProtocol.value === 'adaptive') {
       const defaults = defaultCNAdaptiveBaseUrls(
-        form.platform,
+        form.platform as CnProviderPlatform | 'opencode_go' | 'mirasim',
         form.platform === 'opencode_go' ? openCodeAccountMode.value : accountMode.value
       )
       const protocolBaseUrls: Record<string, string> = {}
@@ -5813,6 +5979,15 @@ const handleSubmit = async () => {
     }
     if (form.platform === 'opencode_go') {
       applyOpenCodeGoProtocolRules(credentials, openCodeGoProtocolRules.value, 'create')
+    }
+    if (form.platform === 'mirasim') {
+      applyMirasimProtocolRules(credentials, mirasimProtocolRules.value, 'create')
+      if (mirasimDeviceId.value.trim()) {
+        credentials.device_id = mirasimDeviceId.value.trim()
+      }
+      if (mirasimPrivateKey.value.trim()) {
+        credentials.private_key = mirasimPrivateKey.value.trim()
+      }
     }
   }
 
@@ -5883,6 +6058,7 @@ const goBackToBasicInfo = () => {
   geminiOAuth.resetState()
   antigravityOAuth.resetState()
   grokOAuth.resetState()
+  mirasimOAuth.resetState()
   oauthFlowRef.value?.reset()
 }
 
@@ -5900,6 +6076,12 @@ const handleGenerateUrl = async () => {
     await antigravityOAuth.generateAuthUrl(form.proxy_id)
   } else if (form.platform === 'grok') {
     await grokOAuth.generateAuthUrl(form.proxy_id)
+  } else if (form.platform === 'mirasim') {
+    // 携带选中的第三方登录提供商（github 或 google）生成授权 URL
+    await mirasimOAuth.generateAuthUrl(
+      form.proxy_id,
+      oauthFlowRef.value?.mirasimProvider || 'github'
+    )
   } else {
     await oauth.generateAuthUrl(addMethod.value, form.proxy_id)
   }
@@ -5912,6 +6094,8 @@ const handleValidateRefreshToken = (rt: string) => {
     handleAntigravityValidateRT(rt)
   } else if (form.platform === 'grok') {
     handleGrokValidateRT(rt)
+  } else if (form.platform === 'mirasim') {
+    handleMirasimValidateRT(rt)
   }
 }
 
@@ -6878,6 +7062,203 @@ const handleGrokExchange = async (authCode: string) => {
   }
 }
 
+/**
+ * Mirasim OAuth 授权码兑换 Token 并自动派生设备公私钥
+ * @param authCode 授权码或回调 URL 完整文本
+ * @returns Promise<void>
+ */
+const handleMirasimExchange = async (authCode: string) => {
+  if (!authCode.trim() || !mirasimOAuth.sessionId.value) return
+
+  mirasimOAuth.loading.value = true
+  mirasimOAuth.error.value = ''
+
+  try {
+    const stateFromInput = oauthFlowRef.value?.oauthState || ''
+    const stateToUse = stateFromInput || mirasimOAuth.state.value
+
+    // 第一步：向后端发起 OAuth 授权码换取 Token，后端自动派生 Ed25519 设备身份与短期 ticket
+    const tokenInfo = await mirasimOAuth.exchangeAuthCode({
+      code: authCode.trim(),
+      rawCallbackInput: authCode.trim(),
+      sessionId: mirasimOAuth.sessionId.value,
+      state: stateToUse,
+      proxyId: form.proxy_id
+    })
+    if (!tokenInfo) return
+
+    // 第二步：构建账号凭据并应用自适应分流协议规则与上游 Base URL
+    const credentials = mirasimOAuth.buildCredentials(tokenInfo)
+    applyMirasimProtocolRules(credentials, mirasimProtocolRules.value, 'create')
+    const extra = mirasimOAuth.buildExtraInfo(tokenInfo)
+
+    // 第三步：完成账号创建入库与页面跳转
+    await createAccountAndFinish('mirasim', 'oauth', credentials, extra)
+  } catch (error: any) {
+    mirasimOAuth.error.value = error.response?.data?.detail || t('admin.accounts.oauth.authFailed')
+    appStore.showError(mirasimOAuth.error.value)
+  } finally {
+    mirasimOAuth.loading.value = false
+  }
+}
+
+/**
+ * 发送 Mirasim 邮箱登录验证码
+ * @param email 接收验证码的邮箱地址
+ * @returns Promise<void>
+ */
+const handleMirasimSendEmailCode = async (email: string) => {
+  // 步骤：调用 Mirasim OAuth 发送邮箱验证码接口
+  await mirasimOAuth.sendEmailCode(email, form.proxy_id)
+}
+
+/**
+ * 校验 Mirasim 邮箱验证码并换取 Token，全自动生成设备身份并入库
+ * @param payload 包含 email 与 code 的对象
+ * @returns Promise<void>
+ */
+const handleMirasimVerifyEmailCode = async (payload: { email: string; code: string }) => {
+  mirasimOAuth.loading.value = true
+  mirasimOAuth.error.value = ''
+
+  try {
+    // 第一步：校验邮箱验证码，后端向 auth.mirasim.ai 换取 Token 并自动派生设备私钥
+    const tokenInfo = await mirasimOAuth.verifyEmailCode(payload.email, payload.code, form.proxy_id)
+    if (!tokenInfo) return
+
+    // 第二步：构建凭据并应用 Mirasim 协议规则
+    const credentials = mirasimOAuth.buildCredentials(tokenInfo)
+    applyMirasimProtocolRules(credentials, mirasimProtocolRules.value, 'create')
+    const extra = mirasimOAuth.buildExtraInfo(tokenInfo)
+
+    // 第三步：完成账号创建入库与页面跳转
+    await createAccountAndFinish('mirasim', 'oauth', credentials, extra)
+  } catch (error: any) {
+    mirasimOAuth.error.value = error.response?.data?.detail || t('admin.accounts.oauth.mirasim.failedToVerifyCode')
+    appStore.showError(mirasimOAuth.error.value)
+  } finally {
+    mirasimOAuth.loading.value = false
+  }
+}
+
+/**
+ * 从本机 ~/.mirasim 客户端一键导入已登录凭据与设备私钥并创建账号
+ * @returns Promise<void>
+ */
+const handleMirasimImportLocalApp = async () => {
+  mirasimOAuth.loading.value = true
+  mirasimOAuth.error.value = ''
+
+  try {
+    // 第一步：调用后端读取本机 ~/.mirasim/setting.json 及 device.json 凭据
+    const tokenInfo = await mirasimOAuth.importLocalMirasim()
+    if (!tokenInfo) return
+
+    // 第二步：构建凭据并应用 Mirasim 协议规则
+    const credentials = mirasimOAuth.buildCredentials(tokenInfo)
+    applyMirasimProtocolRules(credentials, mirasimProtocolRules.value, 'create')
+    const extra = mirasimOAuth.buildExtraInfo(tokenInfo)
+
+    // 第三步：完成账号创建入库与页面跳转
+    await createAccountAndFinish('mirasim', 'oauth', credentials, extra)
+  } catch (error: any) {
+    mirasimOAuth.error.value = error.response?.data?.detail || t('admin.accounts.oauth.mirasim.failedToImportLocal')
+    appStore.showError(mirasimOAuth.error.value)
+  } finally {
+    mirasimOAuth.loading.value = false
+  }
+}
+
+/**
+ * 校验 Mirasim Refresh Token（支持批量录入并自动生成设备身份）
+ * @param refreshTokenInput 刷新令牌或包含多行刷新令牌的文本
+ * @returns Promise<void>
+ */
+const handleMirasimValidateRT = async (refreshTokenInput: string) => {
+  if (!refreshTokenInput.trim()) return
+
+  // 第一步：拆分多行 Refresh Token，支持批量导入
+  const refreshTokens = refreshTokenInput
+    .split('\n')
+    .map((rt) => rt.trim())
+    .filter((rt) => rt)
+
+  if (refreshTokens.length === 0) {
+    mirasimOAuth.error.value = t('admin.accounts.oauth.mirasim.pleaseEnterRefreshToken')
+    return
+  }
+
+  mirasimOAuth.loading.value = true
+  mirasimOAuth.error.value = ''
+
+  let successCount = 0
+  let failedCount = 0
+  const errors: string[] = []
+
+  try {
+    // 第二步：循环验证每个 Refresh Token 并自动派生设备公私钥
+    for (let i = 0; i < refreshTokens.length; i++) {
+      try {
+        const tokenInfo = await mirasimOAuth.validateRefreshToken(refreshTokens[i], form.proxy_id)
+        if (!tokenInfo) {
+          failedCount++
+          errors.push(`#${i + 1}: ${mirasimOAuth.error.value || 'Validation failed'}`)
+          mirasimOAuth.error.value = ''
+          continue
+        }
+
+        const credentials = mirasimOAuth.buildCredentials(tokenInfo, refreshTokens[i])
+        applyMirasimProtocolRules(credentials, mirasimProtocolRules.value, 'create')
+        const extra = mirasimOAuth.buildExtraInfo(tokenInfo)
+        const accountName = refreshTokens.length > 1
+          ? `${form.name || tokenInfo.email || 'Mirasim Account'} #${i + 1}`
+          : (form.name || tokenInfo.email || 'Mirasim Account')
+
+        await adminAPI.accounts.create({
+          name: accountName,
+          notes: form.notes,
+          platform: 'mirasim',
+          type: 'oauth',
+          credentials,
+          extra,
+          proxy_id: form.proxy_id,
+          concurrency: form.concurrency,
+          load_factor: form.load_factor ?? undefined,
+          priority: form.priority,
+          rate_multiplier: form.rate_multiplier,
+          group_ids: form.group_ids,
+          expires_at: form.expires_at,
+          auto_pause_on_expired: autoPauseOnExpired.value
+        })
+        successCount++
+      } catch (err: any) {
+        failedCount++
+        errors.push(`#${i + 1}: ${err.response?.data?.detail || err.message}`)
+      }
+    }
+
+    // 第三步：根据批量创建结果给出提示
+    if (successCount > 0 && failedCount === 0) {
+      appStore.showSuccess(
+        refreshTokens.length > 1
+          ? t('admin.accounts.oauth.batchSuccess', { count: successCount })
+          : t('admin.accounts.accountCreated')
+      )
+      handleClose()
+      emit('created')
+    } else if (successCount > 0) {
+      appStore.showWarning(t('admin.accounts.oauth.batchPartialSuccess', { success: successCount, failed: failedCount }))
+      mirasimOAuth.error.value = errors.join('\n')
+      emit('created')
+    } else {
+      mirasimOAuth.error.value = errors.join('\n')
+      appStore.showError(t('admin.accounts.oauth.batchFailed'))
+    }
+  } finally {
+    mirasimOAuth.loading.value = false
+  }
+}
+
 // Anthropic OAuth 授权码兑换
 const handleAnthropicExchange = async (authCode: string) => {
   if (!authCode.trim() || !oauth.sessionId.value) return
@@ -6980,6 +7361,8 @@ const handleExchangeCode = async () => {
       return handleAntigravityExchange(authCode)
     case 'grok':
       return handleGrokExchange(authCode)
+    case 'mirasim':
+      return handleMirasimExchange(authCode)
     default:
       return handleAnthropicExchange(authCode)
   }

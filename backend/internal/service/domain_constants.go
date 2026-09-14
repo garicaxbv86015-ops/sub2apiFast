@@ -49,6 +49,7 @@ const (
 	PlatformDeepseek   = domain.PlatformDeepseek
 	PlatformMiniMax    = domain.PlatformMiniMax
 	PlatformOpenCodeGo = domain.PlatformOpenCodeGo
+	PlatformMirasim    = domain.PlatformMirasim
 	PlatformComposite  = domain.PlatformComposite
 	// PlatformKiro is retained for unsupported-platform threshold tests and legacy
 	// account rows. Scheduling-threshold evaluation never pauses kiro accounts.
@@ -101,6 +102,8 @@ const (
 )
 
 // IsCNProvider 报告 platform 是否为国产 OpenAI 兼容供应商（kimi/zhipu/deepseek/minimax）。
+// Mirasim 单独走 testMirasimAccountConnection（设备 ticket + x-mirasim-* 签名），
+// 不能复用 CN 供应商的裸 API Key 探测链路，故不计入 CN provider。
 func IsCNProvider(platform string) bool {
 	switch platform {
 	case PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax:
@@ -115,10 +118,15 @@ func IsOpenCodeGo(platform string) bool {
 	return platform == PlatformOpenCodeGo
 }
 
+// IsMirasim 报告 platform 是否为 Mirasim 网关。
+func IsMirasim(platform string) bool {
+	return platform == PlatformMirasim
+}
+
 // IsMultiProtocolAPIKeyProvider 报告 platform 是否为多协议 API Key 网关
-// （国产供应商 + OpenCode）：走 OpenAI 网关、支持 adaptive 协议分流。
+// （国产供应商 + OpenCode + Mirasim）：走 OpenAI 网关、支持 adaptive 协议分流。
 func IsMultiProtocolAPIKeyProvider(platform string) bool {
-	return IsCNProvider(platform) || platform == PlatformOpenCodeGo
+	return IsCNProvider(platform) || platform == PlatformOpenCodeGo || platform == PlatformMirasim
 }
 
 // AllowedQuotaPlatforms 是允许设置 user × platform quota 的平台列表（单一权威来源）。
@@ -135,6 +143,7 @@ var AllowedQuotaPlatforms = []string{
 	PlatformDeepseek,
 	PlatformMiniMax,
 	PlatformOpenCodeGo,
+	PlatformMirasim,
 }
 
 // AllowedSchedulingThresholdPlatforms 是允许设置账号自动停调阈值的平台列表。
@@ -148,6 +157,7 @@ var AllowedSchedulingThresholdPlatforms = []string{
 	PlatformZhipu,
 	PlatformMiniMax,
 	PlatformOpenCodeGo,
+	PlatformMirasim,
 }
 
 // IsAllowedQuotaPlatform 报告 s 是否为合法的 quota platform 标识。

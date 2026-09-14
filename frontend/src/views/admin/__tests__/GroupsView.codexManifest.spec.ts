@@ -48,6 +48,13 @@ vi.mock("@/stores/app", () => ({
   }),
 }));
 
+vi.mock("@/stores/auth", () => ({
+  useAuthStore: () => ({
+    user: { role: "admin" },
+    token: "test",
+  }),
+}));
+
 vi.mock("@/stores/onboarding", () => ({
   useOnboardingStore: () => ({
     isCurrentStep: vi.fn(() => false),

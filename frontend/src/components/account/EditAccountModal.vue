@@ -53,7 +53,7 @@
             @select="editBaseUrl = $event"
           />
           <CnBaseUrlPresets
-            v-if="isCNApiKeyAccount && account.platform !== 'opencode_go'"
+            v-if="isCNApiKeyAccount && account.platform !== 'opencode_go' && account.platform !== 'mirasim'"
             class="mt-2"
             :platform="cnPresetPlatform"
             :mode="editAccountMode"
@@ -129,7 +129,7 @@
           </div>
         </div>
         <!-- Account Mode Selection (CN providers) -->
-        <div v-if="isCNApiKeyAccount && account.platform !== 'opencode_go'">
+        <div v-if="isCNApiKeyAccount && account.platform !== 'opencode_go' && account.platform !== 'mirasim'">
           <label class="input-label">{{ t('admin.accounts.cnProviders.accountMode.title') }}</label>
           <div class="mt-2 flex flex-wrap gap-2">
             <button
@@ -149,7 +149,7 @@
           </div>
           <p class="input-hint">{{ t(`admin.accounts.cnProviders.accountMode.${editAccountMode}Desc`) }}</p>
         </div>
-        <!-- API Protocol Selection (CN providers / OpenCode) -->
+        <!-- API Protocol Selection (CN providers / OpenCode / Mirasim) -->
         <div v-if="isCNApiKeyAccount">
           <label class="input-label">{{ t('admin.accounts.cnProviders.apiProtocol.title') }}</label>
           <div class="mt-2 flex flex-wrap gap-2">
@@ -174,6 +174,10 @@
           v-if="account.platform === 'opencode_go' && editApiProtocol === 'adaptive'"
           v-model:rows="editOpenCodeGoProtocolRules"
           :plan="editOpenCodeAccountMode"
+        />
+        <MirasimProtocolRulesEditor
+          v-if="account.platform === 'mirasim' && editApiProtocol === 'adaptive'"
+          v-model:rows="editMirasimProtocolRules"
         />
         <!-- Zhipu 团队版 Coding Plan：组织/项目 ID（可选，填写后用量查询走团队版端点） -->
         <div v-if="account.platform === 'zhipu' && editAccountMode === 'coding'">
@@ -205,7 +209,7 @@
           <p class="input-hint mt-2">{{ t('admin.accounts.cnProviders.zhipuTeam.hint') }}</p>
         </div>
         <div>
-          <label class="input-label">{{ t('admin.accounts.apiKey') }}</label>
+          <label class="input-label">{{ account.platform === 'mirasim' ? t('admin.accounts.mirasim.apiKeyLabel') : t('admin.accounts.apiKey') }}</label>
           <input
             v-model="editApiKey"
             type="password"
@@ -221,12 +225,37 @@
                   ? 'AIza...'
                   : account.platform === 'antigravity'
                     ? 'sk-...'
-                    : account.platform === 'grok'
-                      ? 'xai-...'
-                      : 'sk-ant-...'
+                    : account.platform === 'mirasim'
+                      ? 'ey...'
+                      : account.platform === 'grok'
+                        ? 'xai-...'
+                        : 'sk-ant-...'
             "
           />
           <p class="input-hint">{{ t('admin.accounts.leaveEmptyToKeep') }}</p>
+        </div>
+
+        <!-- Mirasim 设备私钥与设备 ID（可选，用于签署设备票据） -->
+        <div v-if="account.platform === 'mirasim'" class="space-y-3 rounded-lg border border-gray-200 bg-gray-50/60 p-3 dark:border-dark-600 dark:bg-dark-800/40">
+          <div>
+            <label class="input-label mb-1">{{ t('admin.accounts.mirasim.deviceId') }}</label>
+            <input
+              v-model="editMirasimDeviceId"
+              type="text"
+              class="input font-mono text-sm"
+              :placeholder="t('admin.accounts.mirasim.deviceIdPlaceholder')"
+            />
+          </div>
+          <div>
+            <label class="input-label mb-1">{{ t('admin.accounts.mirasim.privateKey') }}</label>
+            <input
+              v-model="editMirasimPrivateKey"
+              type="password"
+              class="input font-mono text-sm"
+              :placeholder="t('admin.accounts.mirasim.privateKeyPlaceholder')"
+            />
+          </div>
+          <p class="input-hint">{{ t('admin.accounts.mirasim.deviceHint') }}</p>
         </div>
 
         <!-- Model Restriction Section (不适用于 Antigravity) -->
@@ -3053,17 +3082,21 @@ import QuotaLimitCard from '@/components/account/QuotaLimitCard.vue'
 import GrokBaseUrlPresets from '@/components/account/GrokBaseUrlPresets.vue'
 import CnBaseUrlPresets from '@/components/account/CnBaseUrlPresets.vue'
 import OpenCodeGoProtocolRulesEditor from '@/components/account/OpenCodeGoProtocolRulesEditor.vue'
+import MirasimProtocolRulesEditor from '@/components/account/MirasimProtocolRulesEditor.vue'
 import HeaderOverrideEditor from '@/components/account/HeaderOverrideEditor.vue'
 import OllamaCloudUsageSettings from '@/components/account/OllamaCloudUsageSettings.vue'
 import {
   applyAntigravityProjectID,
   applyHeaderOverride,
   applyInterceptWarmup,
+  applyMirasimProtocolRules,
   applyOpenCodeGoProtocolRules,
   applyPlanType,
   buildPlanTypeOptions,
+  cloneMirasimProtocolRules,
   cloneOpenCodeGoProtocolRules,
   defaultOpenCodeProtocolRules,
+  parseMirasimProtocolRules,
   parseOpenCodeGoProtocolRules,
   readPlanType,
   resolveOpenCodeAccountMode,
@@ -3082,6 +3115,7 @@ import {
   type CnNativeApiProtocol,
   type CnProviderPlatform,
   type HeaderOverrideRow,
+  type MirasimProtocolRule,
   type OpenCodeAccountMode,
   type OpenCodeGoProtocolRule
 } from '@/components/account/credentialsBuilder'
@@ -3183,13 +3217,13 @@ const submitting = ref(false)
 const editBaseUrl = ref('https://api.anthropic.com')
 const editApiKey = ref('')
 
-// ── 国产供应商（Kimi / Zhipu / DeepSeek）account_mode / api_protocol 编辑 ──
+// ── 国产供应商（Kimi / Zhipu / DeepSeek / Mirasim）account_mode / api_protocol 编辑 ──
 // account_mode 决定额度/余额监控路径，api_protocol 决定转发端点与格式；
 // 二者均可修正（早期创建的账号可能存错默认值），切换时重置 base_url 预置。
 const isCNApiKeyAccount = computed(
   () =>
     props.account?.type === 'apikey' &&
-    (isCNProviderPlatform(props.account.platform) || props.account.platform === 'opencode_go')
+    (isCNProviderPlatform(props.account.platform) || props.account.platform === 'opencode_go' || props.account.platform === 'mirasim')
 )
 // CnBaseUrlPresets 的 platform prop 是平台字面量联合类型，模板里不能写
 // `as` 断言（其中的 `|` 会被 eslint 误判为 Vue2 filter 语法），经此 computed 传递。
@@ -3200,12 +3234,16 @@ const cnPresetPlatform = computed<CnProviderPlatform>(() => {
   }
   return 'kimi'
 })
-const adaptivePresetPlatform = computed<CnProviderPlatform | 'opencode_go'>(() => {
+const adaptivePresetPlatform = computed<CnProviderPlatform | 'opencode_go' | 'mirasim'>(() => {
   if (props.account?.platform === 'opencode_go') return 'opencode_go'
+  if (props.account?.platform === 'mirasim') return 'mirasim'
   return cnPresetPlatform.value
 })
 const editApiProtocol = ref<CnApiProtocol>('adaptive')
 const editOpenCodeGoProtocolRules = ref<OpenCodeGoProtocolRule[]>(cloneOpenCodeGoProtocolRules())
+const editMirasimProtocolRules = ref<MirasimProtocolRule[]>(cloneMirasimProtocolRules())
+const editMirasimDeviceId = ref('')
+const editMirasimPrivateKey = ref('')
 const editAccountMode = ref<CnAccountMode>('payg')
 const editOpenCodeAccountMode = ref<OpenCodeAccountMode>('go')
 function currentOpenCodeOrCNMode(): CnAccountMode | OpenCodeAccountMode {
@@ -3277,7 +3315,7 @@ watch(editApiProtocol, (protocol, previousProtocol) => {
 })
 watch(editAccountMode, (mode, previousMode) => {
   if (!isCNApiKeyAccount.value || syncingForm.value) return
-  if (props.account?.platform === 'opencode_go') return
+  if (props.account?.platform === 'opencode_go' || props.account?.platform === 'mirasim') return
   // deepseek 无 coding 套餐：防御性回退（UI 已隐藏该选项）。
   const effectiveMode = props.account!.platform === 'deepseek' && mode === 'coding' ? 'payg' : mode
   if (effectiveMode !== mode) {
@@ -3826,7 +3864,8 @@ const defaultBaseUrl = computed(() => {
     props.account?.platform === 'kimi' ||
     props.account?.platform === 'zhipu' ||
     props.account?.platform === 'deepseek' ||
-    props.account?.platform === 'opencode_go'
+    props.account?.platform === 'opencode_go' ||
+    props.account?.platform === 'mirasim'
   ) {
     return defaultCNBaseUrl(props.account.platform, currentOpenCodeOrCNMode(), editApiProtocol.value)
   }
@@ -4201,9 +4240,9 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   // Initialize API Key fields for apikey type
   if (newAccount.type === 'apikey' && newAccount.credentials) {
     const credentials = newAccount.credentials as Record<string, unknown>
-    // 国产供应商：读取 account_mode 与 api_protocol 作为可编辑初始值
+    // 国产供应商与多协议平台：读取 account_mode 与 api_protocol 作为可编辑初始值
     // （编辑弹窗允许修正两者，用于修复早期存错默认值的账号）。
-    if (isCNProviderPlatform(newAccount.platform) || newAccount.platform === 'opencode_go') {
+    if (isCNProviderPlatform(newAccount.platform) || newAccount.platform === 'opencode_go' || newAccount.platform === 'mirasim') {
       if (newAccount.platform === 'opencode_go') {
         editOpenCodeAccountMode.value = resolveOpenCodeAccountMode(credentials.account_mode)
       } else {
@@ -4261,6 +4300,13 @@ const syncFormFromAccount = (newAccount: Account | null) => {
           parseOpenCodeGoProtocolRules(credentials.protocol_rules) ??
           cloneOpenCodeGoProtocolRules(defaultOpenCodeProtocolRules(editOpenCodeAccountMode.value))
       }
+      if (newAccount.platform === 'mirasim') {
+        editMirasimProtocolRules.value =
+          parseMirasimProtocolRules(credentials.protocol_rules) ??
+          cloneMirasimProtocolRules()
+        editMirasimDeviceId.value = typeof credentials.device_id === 'string' ? credentials.device_id : ''
+        editMirasimPrivateKey.value = typeof credentials.private_key === 'string' ? credentials.private_key : ''
+      }
     }
     const platformDefaultUrl =
       newAccount.platform === 'openai'
@@ -4272,7 +4318,8 @@ const syncFormFromAccount = (newAccount: Account | null) => {
             : newAccount.platform === 'kimi' ||
                 newAccount.platform === 'zhipu' ||
                 newAccount.platform === 'deepseek' ||
-                newAccount.platform === 'opencode_go'
+                newAccount.platform === 'opencode_go' ||
+                newAccount.platform === 'mirasim'
               ? defaultCNBaseUrl(newAccount.platform, currentOpenCodeOrCNMode(), editApiProtocol.value)
               : 'https://api.anthropic.com'
     editBaseUrl.value = isCNApiKeyAccount.value && editApiProtocol.value === 'adaptive'
@@ -5021,6 +5068,19 @@ const handleSubmit = async () => {
         }
         if (props.account.platform === 'opencode_go') {
           applyOpenCodeGoProtocolRules(newCredentials, editOpenCodeGoProtocolRules.value, 'edit')
+        }
+        if (props.account.platform === 'mirasim') {
+          applyMirasimProtocolRules(newCredentials, editMirasimProtocolRules.value, 'edit')
+          if (editMirasimDeviceId.value.trim()) {
+            newCredentials.device_id = editMirasimDeviceId.value.trim()
+          } else {
+            delete newCredentials.device_id
+          }
+          if (editMirasimPrivateKey.value.trim()) {
+            newCredentials.private_key = editMirasimPrivateKey.value.trim()
+          } else {
+            delete newCredentials.private_key
+          }
         }
         // 智谱团队版 Coding Plan：组织/项目 ID 写入凭据（非空才写，清空即移除回落个人版路径）
         if (props.account.platform === 'zhipu') {

@@ -465,6 +465,15 @@ export function getModelsByPlatform(platform: string): string[] {
       'qwen3.8-max', 'qwen3.8-flash', 'qwen3.7-max', 'qwen3.7-plus', 'qwen3.6-plus',
       'hy4-preview', 'hy3', 'omen-alpha'
     ]
+    case 'mirasim': return [
+      'claude-opus-5',
+      'claude-sonnet-4-6',
+      'claude-haiku-4-5',
+      'gpt-6-astra',
+      'gpt-5.5',
+      'gemini-3-flash',
+      'deepseek-v3'
+    ]
     case 'doubao': return doubaoModels
     case 'minimax': return minimaxModels
     case 'baidu': return baiduModels

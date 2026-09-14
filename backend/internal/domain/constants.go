@@ -31,6 +31,8 @@ const (
 	// PlatformOpenCodeGo 是 OpenCode 平台（账号类型 Zen 按量 / Go 订阅）。
 	// 值保持 opencode_go 以兼容已落库的分组、配额与 Composite 路由 CHECK。
 	PlatformOpenCodeGo = "opencode_go"
+	// PlatformMirasim 是 Mirasim 平台（客户端中继网关，支持 WASM 设备凭据与 5h 窗口配额）。
+	PlatformMirasim = "mirasim"
 	PlatformComposite  = "composite"
 )
 

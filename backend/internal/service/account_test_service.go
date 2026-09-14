@@ -389,7 +389,184 @@ func (s *AccountTestService) TestAccountConnection(c *gin.Context, accountID int
 		return s.testOpenCodeGoAccountConnection(c, account, modelID, prompt)
 	}
 
+	if account.IsMirasim() {
+		return s.testMirasimAccountConnection(c, account, modelID, prompt)
+	}
+
 	return s.testClaudeAccountConnection(c, account, modelID)
+}
+
+// testMirasimAccountConnection 处理 Mirasim 自适应网关的测试连接。
+// relay.mirasim.ai 要求设备票据（ticket）+ x-mirasim-* 签名，因此按解析出的协议分流：
+//   - claude-* → Anthropic Messages 协议（POST {base}/v1/messages）
+//   - gpt-* 等 → 原生 OpenAI Responses 协议（POST {base}/v1/responses，relay 不提供 chat_completions）
+func (s *AccountTestService) testMirasimAccountConnection(c *gin.Context, account *Account, modelID string, prompt string) error {
+	ctx := c.Request.Context()
+	testModelID := strings.TrimSpace(modelID)
+	if testModelID == "" {
+		testModelID = claude.DefaultTestModel
+	}
+	testModelID = account.GetMappedModel(testModelID)
+
+	// 探测前若 access token 已过期则主动刷新，保证换票与签名用最新凭据。
+	s.ensureMirasimTestTokenFresh(ctx, account)
+
+	if strings.TrimSpace(account.GetMirasimIssuerToken()) == "" && strings.TrimSpace(account.GetCredential("api_key")) == "" {
+		return s.sendErrorAndEnd(c, "No access token available")
+	}
+
+	proto := mirasimNativeProtocol(account, testModelID)
+	if proto == APIProtocolAnthropic {
+		baseURL := account.GetAnthropicProtocolBaseURL()
+		if baseURL == "" {
+			baseURL = account.mirasimDefaultAnthropicBaseURL()
+		}
+		normalizedBaseURL, err := s.validateUpstreamBaseURL(baseURL)
+		if err != nil {
+			return s.sendErrorAndEnd(c, fmt.Sprintf("Invalid Anthropic base URL: %s", err.Error()))
+		}
+		return s.testMirasimAnthropicConnection(c, account, testModelID, normalizedBaseURL)
+	}
+
+	// GPT 等模型走原生 Responses 协议
+	baseURL := account.GetCNProtocolBaseURL(APIProtocolResponses)
+	if baseURL == "" {
+		baseURL = DefaultMirasimBaseURL
+	}
+	normalizedBaseURL, err := s.validateUpstreamBaseURL(baseURL)
+	if err != nil {
+		return s.sendErrorAndEnd(c, fmt.Sprintf("Invalid base URL: %s", err.Error()))
+	}
+	return s.testMirasimResponsesConnection(c, account, testModelID, prompt, normalizedBaseURL)
+}
+
+// ensureMirasimTestTokenFresh 测试连接前刷新已过期的 Mirasim token（复用 quota 的刷新逻辑）。
+func (s *AccountTestService) ensureMirasimTestTokenFresh(ctx context.Context, account *Account) {
+	if account == nil || !account.IsMirasim() {
+		return
+	}
+	expiresAt := account.GetCredentialAsTime("expires_at")
+	if expiresAt == nil || time.Until(*expiresAt) > 2*time.Minute {
+		return
+	}
+	if strings.TrimSpace(account.GetCredential("refresh_token")) == "" {
+		return
+	}
+	oauthSvc := NewMirasimOAuthService(nil, nil)
+	tokenInfo, err := oauthSvc.RefreshAccountToken(ctx, account)
+	if err != nil {
+		return
+	}
+	newCreds := MergeCredentials(account.Credentials, oauthSvc.BuildAccountCredentials(tokenInfo))
+	_ = persistAccountCredentials(ctx, s.accountRepo, account, newCreds)
+}
+
+// testMirasimAnthropicConnection 通过 Anthropic Messages 协议 + Mirasim 设备票据签名测试连接。
+func (s *AccountTestService) testMirasimAnthropicConnection(c *gin.Context, account *Account, testModelID, baseURL string) error {
+	ctx := c.Request.Context()
+	apiURL := strings.TrimRight(baseURL, "/") + "/v1/messages"
+
+	c.Writer.Header().Set("Content-Type", "text/event-stream")
+	c.Writer.Header().Set("Cache-Control", "no-cache")
+	c.Writer.Header().Set("Connection", "keep-alive")
+	c.Writer.Header().Set("X-Accel-Buffering", "no")
+	c.Writer.Flush()
+
+	payload, err := createTestPayload(testModelID)
+	if err != nil {
+		return s.sendErrorAndEnd(c, "Failed to create test payload")
+	}
+	payloadBytes, _ := json.Marshal(payload)
+	s.sendEvent(c, TestEvent{Type: "test_start", Model: testModelID})
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, bytes.NewReader(payloadBytes))
+	if err != nil {
+		return s.sendErrorAndEnd(c, "Failed to create request")
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	req.Header.Set("anthropic-version", "2023-06-01")
+	for key, value := range claude.DefaultHeaders {
+		req.Header.Set(key, value)
+	}
+	account.ApplyHeaderOverrides(req.Header)
+
+	// Mirasim 设备票据换发 + x-mirasim-* 签名（Authorization 会被覆盖为 ticket）。
+	if err := SignAndSealRelayRequest(ctx, req, account, payloadBytes); err != nil {
+		return s.sendErrorAndEnd(c, fmt.Sprintf("Mirasim sign failed: %s", err.Error()))
+	}
+
+	proxyURL := ""
+	if account.ProxyID != nil && account.Proxy != nil {
+		proxyURL = account.Proxy.URL()
+	}
+	resp, err := s.httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, s.tlsFPProfileService.ResolveTLSProfile(account))
+	if err != nil {
+		return s.sendErrorAndEnd(c, fmt.Sprintf("Mirasim Anthropic request failed: %s", err.Error()))
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return s.sendErrorAndEnd(c, fmt.Sprintf("Mirasim Anthropic returned %d: %s", resp.StatusCode, string(body)))
+	}
+	return s.processClaudeStream(c, resp.Body)
+}
+
+// testMirasimChatCompletionsConnection 通过 Chat Completions 协议 + Mirasim 设备票据签名测试连接。
+// testMirasimResponsesConnection 通过原生 OpenAI Responses 协议 + Mirasim 设备票据签名测试连接。
+// relay 对 gpt-* 仅提供 /v1/responses 端点（实测 chat_completions 返回 404 use /v1/responses）。
+func (s *AccountTestService) testMirasimResponsesConnection(c *gin.Context, account *Account, testModelID, prompt, baseURL string) error {
+	ctx := c.Request.Context()
+	apiURL := buildOpenAIResponsesURLForPlatform(account.Platform, baseURL)
+
+	c.Writer.Header().Set("Content-Type", "text/event-stream")
+	c.Writer.Header().Set("Cache-Control", "no-cache")
+	c.Writer.Header().Set("Connection", "keep-alive")
+	c.Writer.Header().Set("X-Accel-Buffering", "no")
+	c.Writer.Flush()
+
+	payload := createOpenAITestPayload(testModelID, false)
+	// Mirasim relay 的 GPT Responses 端点无状态，移除 OpenAI 探测用的合成 instructions。
+	delete(payload, "instructions")
+	if p := strings.TrimSpace(prompt); p != "" {
+		if input, ok := payload["input"].([]map[string]any); ok && len(input) > 0 {
+			if content, ok := input[0]["content"].([]map[string]any); ok && len(content) > 0 {
+				content[0]["text"] = p
+			}
+		}
+	}
+	payloadBytes, _ := json.Marshal(payload)
+	s.sendEvent(c, TestEvent{Type: "test_start", Model: testModelID})
+	s.sendEvent(c, TestEvent{Type: "status", Text: "正在通过 /v1/responses 测试连接"})
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, bytes.NewReader(payloadBytes))
+	if err != nil {
+		return s.sendErrorAndEnd(c, "Failed to create request")
+	}
+	req = req.WithContext(WithHTTPUpstreamProfile(req.Context(), HTTPUpstreamProfileOpenAI))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	account.ApplyHeaderOverrides(req.Header)
+
+	// Mirasim 设备票据换发 + x-mirasim-* 签名（Authorization 会被覆盖为 ticket）。
+	if err := SignAndSealRelayRequest(ctx, req, account, payloadBytes); err != nil {
+		return s.sendErrorAndEnd(c, fmt.Sprintf("Mirasim sign failed: %s", err.Error()))
+	}
+
+	proxyURL := ""
+	if account.ProxyID != nil && account.Proxy != nil {
+		proxyURL = account.Proxy.URL()
+	}
+	resp, err := s.httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, s.tlsFPProfileService.ResolveTLSProfile(account))
+	if err != nil {
+		return s.sendErrorAndEnd(c, fmt.Sprintf("Mirasim Responses request failed: %s", err.Error()))
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return s.sendErrorAndEnd(c, fmt.Sprintf("Mirasim Responses returned %d: %s", resp.StatusCode, string(body)))
+	}
+	return s.processOpenAIStream(c, resp.Body)
 }
 
 // testOpenCodeGoAccountConnection probes the native endpoint for the selected

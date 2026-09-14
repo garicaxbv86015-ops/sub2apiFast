@@ -180,6 +180,21 @@ func (s *TokenRefreshService) SetRefreshPolicy(policy BackgroundRefreshPolicy) {
 	s.refreshPolicy = policy
 }
 
+// RegisterMirasimOAuthService 注册 Mirasim 平台的 Token 自动刷新执行器。
+// 参数：
+//   - mirasimOAuthService: Mirasim 授权服务
+func (s *TokenRefreshService) RegisterMirasimOAuthService(mirasimOAuthService *MirasimOAuthService) {
+	if mirasimOAuthService == nil {
+		return
+	}
+	refresher := NewMirasimTokenRefresher(mirasimOAuthService)
+	s.registrations = append(s.registrations, tokenRefreshRegistration{
+		platform:  PlatformMirasim,
+		refresher: refresher,
+		executor:  refresher,
+	})
+}
+
 func (s *TokenRefreshService) SetAccountRuntimeBlocker(blocker AccountRuntimeBlocker) {
 	s.runtimeBlocker = blocker
 }

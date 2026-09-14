@@ -88,6 +88,11 @@ const PROVIDER_ICONS: Record<Provider, IconData> = {
       'M16 6H8v12h8V6zm4 16H4V2h16v20z',
     ],
   },
+  mirasim: {
+    paths: [
+      'M4 19V5h3.5l4.5 7.5L16.5 5H20v14h-3V9.8L12.7 17h-1.4L7 9.8V19H4z',
+    ],
+  },
 }
 
 const props = withDefaults(defineProps<{

@@ -48,6 +48,10 @@
   <svg v-else-if="platform === 'opencode_go'" :class="sizeClass" viewBox="0 0 24 24" fill="currentColor" fill-rule="evenodd">
     <path d="M16 6H8v12h8V6zm4 16H4V2h16v20z" />
   </svg>
+  <!-- Mirasim official mark -->
+  <svg v-else-if="platform === 'mirasim'" :class="sizeClass" viewBox="0 0 24 24" fill="currentColor">
+    <path d="M4 19V5h3.5l4.5 7.5L16.5 5H20v14h-3V9.8L12.7 17h-1.4L7 9.8V19H4z" />
+  </svg>
   <!-- DeepSeek official logo mark (whale) -->
   <svg v-else-if="platform === 'deepseek'" :class="sizeClass" viewBox="0 0 24 24" fill="currentColor">
     <path

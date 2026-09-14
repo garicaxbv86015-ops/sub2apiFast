@@ -12,7 +12,7 @@
         :key="tier.window"
         data-test="cn-provider-quota-tier"
         :label="windowLabel(tier.window)"
-        :color="tier.window === 'weekly' ? 'emerald' : 'indigo'"
+        :color="tier.window === 'weekly' || tier.window.startsWith('7d') ? 'emerald' : 'indigo'"
         :utilization="tier.used_percent"
         :resets-at="tier.reset_at"
       />
@@ -103,13 +103,15 @@ const readExtraString = (key: string): string => {
   return typeof v === 'string' ? v : ''
 }
 
-// 从持久化快照构造展示数据（缺少 5h/weekly 两档键时返回 null）。
+// 从持久化快照构造展示数据（缺少任何已知窗口键时返回 null）。
+// Mirasim 除标准 5h 外还有 7d / 7d_claude / 7d_fable 等扩展窗口，按名读取。
+const MIRASIM_EXTRA_WINDOWS = ['7d', '7d_claude', '7d_fable'] as const
+
 const snapshotData = computed<CNProviderQuotaProbeResult | null>(() => {
   const platform = props.account.platform
   const used5h = readExtraNumber(`${platform}_5h_used_percent`)
   const usedWeekly = readExtraNumber(`${platform}_weekly_used_percent`)
   const usedMonthly = readExtraNumber(`${platform}_monthly_used_percent`)
-  if (used5h == null && usedWeekly == null && usedMonthly == null) return null
   const tiers: CNProviderQuotaProbeResult['tiers'] = []
   if (used5h != null) {
     tiers.push({ window: '5h', used_percent: used5h, reset_at: readExtraString(`${platform}_5h_reset_at`) || undefined })
@@ -120,6 +122,16 @@ const snapshotData = computed<CNProviderQuotaProbeResult | null>(() => {
   if (usedMonthly != null) {
     tiers.push({ window: 'monthly', used_percent: usedMonthly, reset_at: readExtraString(`${platform}_monthly_reset_at`) || undefined })
   }
+  // Mirasim 扩展窗口（后端 cnQuotaExtraUpdates 按 window 名落 <platform>_<window>_used_percent）
+  if (platform === 'mirasim') {
+    for (const w of MIRASIM_EXTRA_WINDOWS) {
+      const used = readExtraNumber(`${platform}_${w}_used_percent`)
+      if (used != null) {
+        tiers.push({ window: w, used_percent: used, reset_at: readExtraString(`${platform}_${w}_reset_at`) || undefined })
+      }
+    }
+  }
+  if (tiers.length === 0) return null
   return { success: true, tiers } as CNProviderQuotaProbeResult
 })
 
@@ -168,6 +180,8 @@ const truncatedError = computed(() => {
 const windowLabel = (window: string) => {
   if (window === 'weekly') return t('admin.accounts.cnProviders.windowWeekly')
   if (window === 'monthly') return t('admin.accounts.cnProviders.windowMonthly')
+  // Mirasim 原生窗口名（5h / 7d / 7d_claude / 7d_fable）直接透传展示。
+  if (window.startsWith('7d')) return window
   return t('admin.accounts.cnProviders.window5h')
 }
 

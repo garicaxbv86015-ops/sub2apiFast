@@ -132,16 +132,21 @@
         :show-cookie-option="isAnthropic"
         :show-refresh-token-option="isOpenAI || isAntigravity || isGrok"
         :show-sso-option="isGrok"
+        :show-email-code-option="isMirasim"
+        :show-local-app-option="isMirasim"
         :show-email-password-option="false"
         :allow-multiple="false"
         :method-label="t('admin.accounts.inputMethod')"
-        :platform="isOpenAI ? 'openai' : isGemini ? 'gemini' : isAntigravity ? 'antigravity' : isGrok ? 'grok' : 'anthropic'"
+        :platform="isOpenAI ? 'openai' : isGemini ? 'gemini' : isAntigravity ? 'antigravity' : isGrok ? 'grok' : isMirasim ? 'mirasim' : 'anthropic'"
         :show-project-id="isGemini && geminiOAuthType === 'code_assist'"
         :initial-input-method="grokInitialInputMethod"
         @generate-url="handleGenerateUrl"
         @cookie-auth="handleCookieAuth"
         @validate-refresh-token="handleValidateRefreshToken"
         @import-sso="handleGrokImportSSO"
+        @send-email-code="handleMirasimSendEmailCode"
+        @verify-email-code="handleMirasimVerifyEmailCode"
+        @import-local-app="handleMirasimImportLocalApp"
       />
 
     </div>
@@ -203,6 +208,7 @@ import { useOpenAIOAuth } from '@/composables/useOpenAIOAuth'
 import { useGeminiOAuth } from '@/composables/useGeminiOAuth'
 import { useAntigravityOAuth } from '@/composables/useAntigravityOAuth'
 import { useGrokOAuth } from '@/composables/useGrokOAuth'
+import { useMirasimOAuth } from '@/composables/useMirasimOAuth'
 import type { Account } from '@/types'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import Icon from '@/components/icons/Icon.vue'
@@ -215,6 +221,7 @@ interface OAuthFlowExposed {
   oauthState: string
   projectId: string
   sessionKey: string
+  mirasimProvider?: 'github' | 'google'
   inputMethod: AuthInputMethod
   reset: () => void
 }
@@ -239,6 +246,7 @@ const openaiOAuth = useOpenAIOAuth()
 const geminiOAuth = useGeminiOAuth()
 const antigravityOAuth = useAntigravityOAuth()
 const grokOAuth = useGrokOAuth()
+const mirasimOAuth = useMirasimOAuth()
 
 // Refs
 const oauthFlowRef = ref<OAuthFlowExposed | null>(null)
@@ -254,6 +262,7 @@ const isGemini = computed(() => props.account?.platform === 'gemini')
 const isAnthropic = computed(() => props.account?.platform === 'anthropic')
 const isAntigravity = computed(() => props.account?.platform === 'antigravity')
 const isGrok = computed(() => props.account?.platform === 'grok')
+const isMirasim = computed(() => props.account?.platform === 'mirasim')
 
 /**
  * Grok reauth default tab (password auth is hidden):
@@ -276,6 +285,7 @@ const currentAuthUrl = computed(() => {
   if (isGemini.value) return geminiOAuth.authUrl.value
   if (isAntigravity.value) return antigravityOAuth.authUrl.value
   if (isGrok.value) return grokOAuth.authUrl.value
+  if (isMirasim.value) return mirasimOAuth.authUrl.value
   return claudeOAuth.authUrl.value
 })
 const currentSessionId = computed(() => {
@@ -283,6 +293,7 @@ const currentSessionId = computed(() => {
   if (isGemini.value) return geminiOAuth.sessionId.value
   if (isAntigravity.value) return antigravityOAuth.sessionId.value
   if (isGrok.value) return grokOAuth.sessionId.value
+  if (isMirasim.value) return mirasimOAuth.sessionId.value
   return claudeOAuth.sessionId.value
 })
 const currentLoading = computed(() => {
@@ -290,6 +301,7 @@ const currentLoading = computed(() => {
   if (isGemini.value) return geminiOAuth.loading.value
   if (isAntigravity.value) return antigravityOAuth.loading.value
   if (isGrok.value) return grokOAuth.loading.value
+  if (isMirasim.value) return mirasimOAuth.loading.value
   return claudeOAuth.loading.value
 })
 const currentError = computed(() => {
@@ -297,21 +309,29 @@ const currentError = computed(() => {
   if (isGemini.value) return geminiOAuth.error.value
   if (isAntigravity.value) return antigravityOAuth.error.value
   if (isGrok.value) return grokOAuth.error.value
+  if (isMirasim.value) return mirasimOAuth.error.value
   return claudeOAuth.error.value
 })
 
 // Computed — footer "complete auth" only for code-exchange flows, not SSO/password/RT.
 const isManualInputMethod = computed(() => {
   const method = oauthFlowRef.value?.inputMethod
-  if (method === 'sso_cookie' || method === 'email_password' || method === 'refresh_token') {
+  if (
+    method === 'sso_cookie' ||
+    method === 'email_password' ||
+    method === 'refresh_token' ||
+    method === 'email_code' ||
+    method === 'local_app'
+  ) {
     return false
   }
-  // OpenAI/Gemini/Antigravity/Grok use manual code paste by default (no cookie auth)
+  // OpenAI/Gemini/Antigravity/Grok/Mirasim use manual code paste by default (no cookie auth)
   return (
     isOpenAILike.value ||
     isGemini.value ||
     isAntigravity.value ||
     isGrok.value ||
+    isMirasim.value ||
     method === 'manual'
   )
 })
@@ -359,6 +379,7 @@ const resetState = () => {
   geminiOAuth.resetState()
   antigravityOAuth.resetState()
   grokOAuth.resetState()
+  mirasimOAuth.resetState()
   oauthFlowRef.value?.reset()
 }
 
@@ -380,6 +401,12 @@ const handleGenerateUrl = async () => {
     await antigravityOAuth.generateAuthUrl(props.account.proxy_id)
   } else if (isGrok.value) {
     await grokOAuth.generateAuthUrl(props.account.proxy_id)
+  } else if (isMirasim.value) {
+    // 携带选中的第三方登录提供商（github 或 google）生成授权 URL
+    await mirasimOAuth.generateAuthUrl(
+      props.account.proxy_id,
+      oauthFlowRef.value?.mirasimProvider || 'github'
+    )
   } else {
     await claudeOAuth.generateAuthUrl(addMethod.value, props.account.proxy_id)
   }
@@ -527,6 +554,34 @@ const handleExchangeCode = async () => {
       grokOAuth.error.value = error.response?.data?.detail || t('admin.accounts.oauth.authFailed')
       appStore.showError(grokOAuth.error.value)
     }
+  } else if (isMirasim.value) {
+    const sessionId = mirasimOAuth.sessionId.value
+    if (!sessionId) return
+
+    const stateFromInput = oauthFlowRef.value?.oauthState || ''
+    const stateToUse = stateFromInput || mirasimOAuth.state.value
+    if (!stateToUse) return
+
+    mirasimOAuth.loading.value = true
+    mirasimOAuth.error.value = ''
+    try {
+      // 步骤：向后端发起 OAuth 授权码换取 Token 与自动生成的设备凭据
+      const tokenInfo = await mirasimOAuth.exchangeAuthCode({
+        code: authCode.trim(),
+        rawCallbackInput: authCode.trim(),
+        sessionId,
+        state: stateToUse,
+        proxyId: props.account.proxy_id
+      })
+      if (!tokenInfo) return
+
+      await applyMirasimReauthTokenInfo(tokenInfo)
+    } catch (error: any) {
+      mirasimOAuth.error.value = error.response?.data?.detail || t('admin.accounts.oauth.authFailed')
+      appStore.showError(mirasimOAuth.error.value)
+    } finally {
+      mirasimOAuth.loading.value = false
+    }
   } else {
     // Claude OAuth flow
     const sessionId = claudeOAuth.sessionId.value
@@ -631,6 +686,10 @@ const handleValidateRefreshToken = async (refreshTokenInput: string) => {
   if (!props.account) return
   if (isGrok.value) {
     await handleGrokValidateRefreshToken(refreshTokenInput)
+    return
+  }
+  if (isMirasim.value) {
+    await handleMirasimValidateRT(refreshTokenInput)
     return
   }
 
@@ -746,6 +805,118 @@ const handleGrokValidateRefreshToken = async (refreshTokenInput: string) => {
     appStore.showError(grokOAuth.error.value)
   } finally {
     grokOAuth.loading.value = false
+  }
+}
+
+/**
+ * 将 Mirasim 重新授权换取的凭据与设备信息应用到当前账号
+ * @param tokenInfo Mirasim Token 与设备信息
+ * @param refreshToken 可选的刷新令牌
+ * @returns Promise<void>
+ */
+const applyMirasimReauthTokenInfo = async (tokenInfo: any, refreshToken?: string) => {
+  if (!props.account) return
+  const credentials = mirasimOAuth.buildCredentials(tokenInfo, refreshToken)
+  const extra = mirasimOAuth.buildExtraInfo(tokenInfo)
+
+  // 第一步：向服务端提交最新的凭据与设备票据
+  const updatedAccount = await adminAPI.accounts.applyOAuthCredentials(props.account.id, {
+    type: 'oauth',
+    credentials,
+    extra
+  })
+
+  // 第二步：提示重授权成功并触发回调
+  appStore.showSuccess(t('admin.accounts.reAuthorizedSuccess'))
+  emit('reauthorized', updatedAccount)
+  handleClose()
+}
+
+/**
+ * 发送 Mirasim 邮箱登录验证码
+ * @param email 接收验证码的邮箱地址
+ * @returns Promise<void>
+ */
+const handleMirasimSendEmailCode = async (email: string) => {
+  if (!props.account) return
+  // 步骤：调用 Mirasim OAuth 发送邮箱验证码接口
+  await mirasimOAuth.sendEmailCode(email, props.account.proxy_id)
+}
+
+/**
+ * 校验 Mirasim 邮箱验证码并重授权
+ * @param payload 包含 email 与 code 的对象
+ * @returns Promise<void>
+ */
+const handleMirasimVerifyEmailCode = async (payload: { email: string; code: string }) => {
+  if (!props.account) return
+  mirasimOAuth.loading.value = true
+  mirasimOAuth.error.value = ''
+  try {
+    // 第一步：校验邮箱验证码并换取 Token 与设备公私钥
+    const tokenInfo = await mirasimOAuth.verifyEmailCode(payload.email, payload.code, props.account.proxy_id)
+    if (!tokenInfo) return
+    // 第二步：应用凭据并完成重授权
+    await applyMirasimReauthTokenInfo(tokenInfo)
+  } catch (error: any) {
+    mirasimOAuth.error.value = error.response?.data?.detail || t('admin.accounts.oauth.mirasim.failedToVerifyCode')
+    appStore.showError(mirasimOAuth.error.value)
+  } finally {
+    mirasimOAuth.loading.value = false
+  }
+}
+
+/**
+ * 从本机 ~/.mirasim 一键导入已登录凭据与设备私钥并重授权
+ * @returns Promise<void>
+ */
+const handleMirasimImportLocalApp = async () => {
+  if (!props.account) return
+  mirasimOAuth.loading.value = true
+  mirasimOAuth.error.value = ''
+  try {
+    // 第一步：从本机 ~/.mirasim 读取 Token 与设备私钥
+    const tokenInfo = await mirasimOAuth.importLocalMirasim()
+    if (!tokenInfo) return
+    // 第二步：应用凭据并完成重授权
+    await applyMirasimReauthTokenInfo(tokenInfo)
+  } catch (error: any) {
+    mirasimOAuth.error.value = error.response?.data?.detail || t('admin.accounts.oauth.mirasim.failedToImportLocal')
+    appStore.showError(mirasimOAuth.error.value)
+  } finally {
+    mirasimOAuth.loading.value = false
+  }
+}
+
+/**
+ * 校验 Mirasim Refresh Token 并重授权
+ * @param refreshTokenInput 刷新令牌
+ * @returns Promise<void>
+ */
+const handleMirasimValidateRT = async (refreshTokenInput: string) => {
+  if (!props.account) return
+  const refreshToken = refreshTokenInput
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)[0]
+  if (!refreshToken) {
+    mirasimOAuth.error.value = t('admin.accounts.oauth.mirasim.pleaseEnterRefreshToken')
+    return
+  }
+
+  mirasimOAuth.loading.value = true
+  mirasimOAuth.error.value = ''
+  try {
+    // 第一步：调用后端验证 Refresh Token 并换发最新 Token 与设备票据
+    const tokenInfo = await mirasimOAuth.validateRefreshToken(refreshToken, props.account.proxy_id)
+    if (!tokenInfo) return
+    // 第二步：应用凭据并完成重授权
+    await applyMirasimReauthTokenInfo(tokenInfo, refreshToken)
+  } catch (error: any) {
+    mirasimOAuth.error.value = error.response?.data?.detail || t('admin.accounts.oauth.authFailed')
+    appStore.showError(mirasimOAuth.error.value)
+  } finally {
+    mirasimOAuth.loading.value = false
   }
 }
 </script>

@@ -46,7 +46,8 @@ export function isHeaderOverrideCapable(platform: string, type: string): boolean
     platform === 'zhipu' ||
     platform === 'deepseek' ||
     platform === 'minimax' ||
-    platform === 'opencode_go'
+    platform === 'opencode_go' ||
+    platform === 'mirasim'
   ) {
     return type === 'apikey'
   }
@@ -357,8 +358,71 @@ export function applyOpenCodeGoProtocolRules(
   }
 }
 
+export const MIRASIM_BASE_URL = 'https://relay.mirasim.ai'
+export const MIRASIM_AUTH_BASE_URL = 'https://auth.mirasim.ai'
+export const MIRASIM_DEFAULT_TEST_MODEL = 'claude-haiku-4-5-20251001'
+export const MIRASIM_PROTOCOL_RULES_KEY = 'protocol_rules'
+
+export function isMirasimPlatform(platform: string): boolean {
+  return platform === 'mirasim'
+}
+
+export type MirasimProtocol = 'chat_completions' | 'anthropic'
+
+export interface MirasimProtocolRule {
+  pattern: string
+  protocol: MirasimProtocol
+}
+
+export const DEFAULT_MIRASIM_PROTOCOL_RULES: MirasimProtocolRule[] = [
+  { pattern: 'claude-*', protocol: 'anthropic' },
+  { pattern: '*', protocol: 'chat_completions' }
+]
+
+export function cloneMirasimProtocolRules(
+  rules: MirasimProtocolRule[] = DEFAULT_MIRASIM_PROTOCOL_RULES
+): MirasimProtocolRule[] {
+  return rules.map(rule => ({ pattern: rule.pattern, protocol: rule.protocol }))
+}
+
+function isNativeMirasimProtocol(value: unknown): value is MirasimProtocol {
+  return value === 'chat_completions' || value === 'anthropic'
+}
+
+export function parseMirasimProtocolRules(raw: unknown): MirasimProtocolRule[] | null {
+  if (raw == null) return null
+  if (!Array.isArray(raw)) return cloneMirasimProtocolRules()
+  const rules: MirasimProtocolRule[] = []
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue
+    const pattern = typeof (item as { pattern?: unknown }).pattern === 'string'
+      ? (item as { pattern: string }).pattern.trim()
+      : ''
+    const protocol = (item as { protocol?: unknown }).protocol
+    if (!pattern || !isNativeMirasimProtocol(protocol)) continue
+    rules.push({ pattern, protocol })
+  }
+  return rules
+}
+
+export function applyMirasimProtocolRules(
+  credentials: Record<string, unknown>,
+  rules: MirasimProtocolRule[],
+  mode: 'create' | 'edit'
+): void {
+  const serialized = rules
+    .map(rule => ({
+      pattern: rule.pattern.trim().toLowerCase(),
+      protocol: rule.protocol
+    }))
+    .filter(rule => rule.pattern.length > 0 && isNativeMirasimProtocol(rule.protocol))
+  if (serialized.length > 0 || mode === 'edit') {
+    credentials[MIRASIM_PROTOCOL_RULES_KEY] = serialized
+  }
+}
+
 export function isMultiProtocolApiKeyPlatform(platform: string): boolean {
-  return platform === 'kimi' || platform === 'zhipu' || platform === 'deepseek' || platform === 'minimax' || platform === 'opencode_go'
+  return platform === 'kimi' || platform === 'zhipu' || platform === 'deepseek' || platform === 'minimax' || platform === 'opencode_go' || platform === 'mirasim'
 }
 
 export interface CnBaseUrlPreset {
@@ -424,6 +488,8 @@ export function defaultCNBaseUrl(
         return 'https://api.minimaxi.com/anthropic'
       case 'opencode_go':
         return mode === 'zen' ? OPENCODE_ZEN_ANTHROPIC_BASE_URL : OPENCODE_GO_ANTHROPIC_BASE_URL
+      case 'mirasim':
+        return MIRASIM_BASE_URL
       default:
         return ''
     }
@@ -442,6 +508,8 @@ export function defaultCNBaseUrl(
       return 'https://api.minimaxi.com/v1'
     case 'opencode_go':
       return mode === 'zen' ? OPENCODE_ZEN_BASE_URL : OPENCODE_GO_BASE_URL
+    case 'mirasim':
+      return MIRASIM_BASE_URL
     default:
       return ''
   }
@@ -449,7 +517,7 @@ export function defaultCNBaseUrl(
 
 /** 返回自适应模式下需要配置的原生协议及其默认端点。 */
 export function defaultCNAdaptiveBaseUrls(
-  platform: CnProviderPlatform | 'opencode_go',
+  platform: CnProviderPlatform | 'opencode_go' | 'mirasim',
   mode: CnAccountMode | OpenCodeAccountMode
 ): Record<CnNativeApiProtocol, string> {
   return {
@@ -464,6 +532,7 @@ export function defaultCNAdaptiveBaseUrls(
 // 共用，避免多处复制条件后一处改另一处漏改。
 
 export function cnQuotaCellVisible(platform: string, accountMode: string): boolean {
+  if (platform === 'mirasim') return true
   if (platform === 'opencode_go') return accountMode !== 'zen'
   return (platform === 'kimi' || platform === 'zhipu' || platform === 'minimax') && accountMode === 'coding'
 }

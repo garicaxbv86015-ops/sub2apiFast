@@ -2875,6 +2875,32 @@ func (h *AccountHandler) GetAvailableModels(c *gin.Context) {
 		return
 	}
 
+	// Handle Mirasim accounts：自适应网关目录（claude-* 走 Anthropic，gpt 走 Chat Completions）。
+	// 优先账号 model_mapping 的 key（管理员手动配置的可用模型），否则复用 Claude 目录 + 少量 GPT 模型。
+	if account.IsMirasim() {
+		mapping := account.GetModelMapping()
+		if len(mapping) > 0 {
+			requested := make([]string, 0, len(mapping))
+			for m := range mapping {
+				requested = append(requested, m)
+			}
+			sort.Strings(requested)
+			models := make([]claude.Model, 0, len(requested))
+			for _, id := range requested {
+				models = append(models, claude.Model{ID: id, Type: "model", DisplayName: id})
+			}
+			response.Success(c, models)
+			return
+		}
+		models := make([]claude.Model, 0, len(claude.DefaultModels)+3)
+		models = append(models, claude.DefaultModels...)
+		for _, id := range []string{"gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra"} {
+			models = append(models, claude.Model{ID: id, Type: "model", DisplayName: id})
+		}
+		response.Success(c, models)
+		return
+	}
+
 	// Handle Grok accounts
 	if account.Platform == service.PlatformGrok {
 		defaultModels := xai.DefaultModels()

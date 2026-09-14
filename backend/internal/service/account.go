@@ -16,6 +16,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/domain"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/geminicli"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/mirasim"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai_compat"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 )
@@ -298,7 +299,7 @@ func (a *Account) IsCNProvider() bool {
 // openai/grok 原生走 OpenAI 网关；国产供应商同为 OpenAI Chat Completions
 // 兼容上游，也经 OpenAI 网关转发。OpenCode 同样经 OpenAI 网关按模型分流。
 func (a *Account) IsOpenAICompatible() bool {
-	return a != nil && (a.Platform == PlatformOpenAI || a.Platform == PlatformGrok || a.IsCNProvider() || a.IsOpenCodeGo())
+	return a != nil && (a.Platform == PlatformOpenAI || a.Platform == PlatformGrok || a.IsCNProvider() || a.IsOpenCodeGo() || a.IsMirasim())
 }
 
 func (a *Account) GeminiOAuthType() string {
@@ -350,6 +351,12 @@ func (a *Account) GetCredential(key string) string {
 	// 支持多种类型（兼容历史数据中 expires_at 等字段可能是数字或字符串）
 	switch val := v.(type) {
 	case string:
+		// 步骤 1: 检查是否为 mrs1: 前缀的 Mirasim 加密密文，若包含则自动解密
+		if strings.HasPrefix(val, "mrs1:") {
+			if dec, err := mirasim.DecryptMrs1String(val); err == nil && dec != "" {
+				return dec
+			}
+		}
 		return val
 	case json.Number:
 		// GORM datatypes.JSONMap 使用 UseNumber() 解析，数字类型为 json.Number
@@ -364,6 +371,34 @@ func (a *Account) GetCredential(key string) string {
 	default:
 		return ""
 	}
+}
+
+// GetMirasimPrivateKey 获取 Mirasim 设备私钥字符串。
+// 优先返回 private_key 凭据，若为空则回退至 device_private_key 凭据。
+// 返回值：
+//   - string: 解密后的私钥字符串，不存在时返回空串
+func (a *Account) GetMirasimPrivateKey() string {
+	if a == nil {
+		return ""
+	}
+	if k := strings.TrimSpace(a.GetCredential("private_key")); k != "" {
+		return k
+	}
+	return strings.TrimSpace(a.GetCredential("device_private_key"))
+}
+
+// GetMirasimIssuerToken 获取 Mirasim 发行方登录凭据 Token。
+// 优先返回 issuer_token 凭据，若为空则回退至 api_key 凭据。
+// 返回值：
+//   - string: 发行方 Token 字符串，不存在时返回空串
+func (a *Account) GetMirasimIssuerToken() string {
+	if a == nil {
+		return ""
+	}
+	if t := strings.TrimSpace(a.GetCredential("issuer_token")); t != "" {
+		return t
+	}
+	return strings.TrimSpace(a.GetCredential("api_key"))
 }
 
 // GetCredentialAsTime 解析凭证中的时间戳字段，支持多种格式
@@ -1346,7 +1381,7 @@ func (a *Account) IsOpenAIApiKey() bool {
 // 适用 openai、国产 OpenAI 兼容供应商（kimi/zhipu/deepseek）与 OpenCode Go；
 // grok 走 GetGrokBaseURL，此处对 grok 返回 "" 以保持原有行为。
 func (a *Account) GetOpenAIBaseURL() string {
-	if !a.IsOpenAI() && !a.IsCNProvider() && !a.IsOpenCodeGo() {
+	if !a.IsOpenAI() && !a.IsCNProvider() && !a.IsOpenCodeGo() && !a.IsMirasim() {
 		return ""
 	}
 	if a.IsMultiProtocolAPIKey() && a.IsAdaptiveAPIProtocol() {
@@ -1356,7 +1391,7 @@ func (a *Account) GetOpenAIBaseURL() string {
 			}
 		}
 	}
-	if a.Type == AccountTypeAPIKey || a.Type == AccountTypeUpstream {
+	if a.Type == AccountTypeAPIKey || a.Type == AccountTypeUpstream || a.Type == AccountTypeOAuth {
 		if baseURL := strings.TrimSpace(a.GetCredential("base_url")); baseURL != "" {
 			return baseURL
 		}
@@ -1379,6 +1414,8 @@ func (a *Account) GetOpenAIBaseURL() string {
 		return DefaultMiniMaxBaseURL
 	case PlatformOpenCodeGo:
 		return a.openCodeDefaultChatBaseURL()
+	case PlatformMirasim:
+		return a.mirasimDefaultChatBaseURL()
 	default:
 		return "https://api.openai.com"
 	}
@@ -1422,7 +1459,7 @@ func (a *Account) GetAPIProtocol() string {
 	case APIProtocolChatCompletions:
 		return APIProtocolChatCompletions
 	}
-	if a.IsOpenCodeGo() {
+	if a.IsOpenCodeGo() || a.IsMirasim() {
 		return APIProtocolAdaptive
 	}
 	return APIProtocolChatCompletions
@@ -1436,7 +1473,7 @@ func (a *Account) SupportsNativeCNResponses() bool {
 		return false
 	}
 	switch a.Platform {
-	case PlatformDeepseek, PlatformKimi, PlatformMiniMax, PlatformOpenCodeGo:
+	case PlatformDeepseek, PlatformKimi, PlatformMiniMax, PlatformOpenCodeGo, PlatformMirasim:
 		return true
 	default:
 		return false
@@ -1501,6 +1538,8 @@ func (a *Account) defaultCNProtocolBaseURL(protocol string) string {
 			return DefaultMiniMaxAnthropicBaseURL
 		case PlatformOpenCodeGo:
 			return a.openCodeDefaultAnthropicBaseURL()
+		case PlatformMirasim:
+			return a.mirasimDefaultAnthropicBaseURL()
 		}
 	case APIProtocolChatCompletions, APIProtocolResponses:
 		switch a.Platform {
@@ -1520,6 +1559,8 @@ func (a *Account) defaultCNProtocolBaseURL(protocol string) string {
 			return DefaultMiniMaxBaseURL
 		case PlatformOpenCodeGo:
 			return a.openCodeDefaultChatBaseURL()
+		case PlatformMirasim:
+			return a.mirasimDefaultChatBaseURL()
 		}
 	}
 	return ""
@@ -1560,6 +1601,8 @@ func (a *Account) GetAnthropicProtocolBaseURL() string {
 		return DefaultMiniMaxAnthropicBaseURL
 	case PlatformOpenCodeGo:
 		return a.openCodeDefaultAnthropicBaseURL()
+	case PlatformMirasim:
+		return a.mirasimDefaultAnthropicBaseURL()
 	default:
 		return ""
 	}
@@ -1591,6 +1634,8 @@ func (a *Account) GetOpenAIFormatBaseURL() string {
 		return DefaultMiniMaxBaseURL
 	case PlatformOpenCodeGo:
 		return a.openCodeDefaultChatBaseURL()
+	case PlatformMirasim:
+		return a.mirasimDefaultChatBaseURL()
 	default:
 		return a.GetOpenAIBaseURL()
 	}
@@ -1614,6 +1659,9 @@ func (a *Account) GetCodingPlanProvider() string {
 	}
 	if a.IsOpenCodeGoPlan() {
 		return PlatformOpenCodeGo
+	}
+	if a.IsMirasim() {
+		return PlatformMirasim
 	}
 	if a.GetAccountMode() != AccountModeCoding {
 		return ""
@@ -1753,10 +1801,18 @@ func (a *Account) GetOpenAIProtocolAPIKey() string {
 		return ""
 	}
 	if a.IsMultiProtocolAPIKey() {
-		if a.Type != AccountTypeAPIKey {
-			return ""
+		if a.Type == AccountTypeAPIKey {
+			return a.GetCredential("api_key")
 		}
-		return a.GetCredential("api_key")
+		// Mirasim 走 OAuth 模式但凭据存放在 api_key / issuer_token 中，
+		// 供测试连接、模型同步等共用路径取到有效的上游 token。
+		if a.IsMirasim() {
+			if token := a.GetMirasimIssuerToken(); token != "" {
+				return token
+			}
+			return strings.TrimSpace(a.GetCredential("api_key"))
+		}
+		return ""
 	}
 	return a.GetOpenAIApiKey()
 }
