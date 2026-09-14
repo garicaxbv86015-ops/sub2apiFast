@@ -1367,11 +1367,21 @@ func shouldForwardOpenAIResponsesViaRawChatCompletions(account *Account) bool {
 	return !openai_compat.ShouldUseResponsesAPI(account.Extra)
 }
 
+// buildUpstreamRequest 构建目标账号的 Responses 请求，Mirasim OAuth 使用自身中继地址。
+// 参数为请求上下文、入站信息、账号、请求体、令牌、流式标志、缓存键和客户端标志；返回上游请求及错误。
 func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Context, account *Account, body []byte, token string, isStream bool, promptCacheKey string, isCodexCLI bool) (*http.Request, error) {
 	// Determine target URL based on account type
 	var targetURL string
 	switch account.Type {
 	case AccountTypeOAuth:
+		if account.IsMirasim() {
+			validatedURL, err := s.validateUpstreamBaseURL(account.GetCNProtocolBaseURL(APIProtocolResponses))
+			if err != nil {
+				return nil, err
+			}
+			targetURL = buildOpenAIResponsesURLForPlatform(account.Platform, validatedURL)
+			break
+		}
 		// OAuth accounts use ChatGPT internal API
 		targetURL = chatgptCodexURL
 	case AccountTypeSetupToken:
@@ -1403,6 +1413,14 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 	// DeepSeek / Kimi 原生 Responses 端点为无状态实现：强制 store=false、清除
 	// previous_response_id，避免携带状态字段被上游拒绝。
 	body = normalizeDeepSeekResponsesRequestBody(account, body)
+	if account.IsMirasim() {
+		// 仅改变上游请求；Forward 保留客户端 stream 值，非流式响应复用 SSE 聚合。
+		var err error
+		body, err = normalizeMirasimResponsesRequestBody(body)
+		if err != nil {
+			return nil, fmt.Errorf("normalize mirasim responses request: %w", err)
+		}
+	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", targetURL, bytes.NewReader(body))
 	if err != nil {
@@ -1512,6 +1530,9 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 
 	// 账号级请求头覆写（仅 openai api_key 账号启用时生效；OAuth 路径 no-op）
 	account.ApplyHeaderOverrides(req.Header)
+	if account.IsMirasim() {
+		req.Header.Set("Accept", "text/event-stream")
+	}
 	applyOpenCodeSessionHeader(c, account, targetURL, req.Header, body, openCodeSessionHintBody(promptCacheKey))
 	// x-codex-beta-features：按真实 Codex 的会话级行为补注（在账号级覆写之后，
 	// 保证不被覆盖丢失）。

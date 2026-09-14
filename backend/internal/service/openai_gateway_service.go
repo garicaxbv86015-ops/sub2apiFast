@@ -1198,7 +1198,8 @@ func hashSensitiveValueForLog(raw string) string {
 	return hex.EncodeToString(sum[:8])
 }
 
-// GetAccessToken gets the access token for an OpenAI account
+// GetAccessToken 根据账号平台读取 OpenAI 兼容协议凭据，Mirasim 使用自身发行方令牌。
+// 参数 ctx 为请求上下文，account 为目标账号；返回令牌、鉴权模式及错误。
 func (s *OpenAIGatewayService) GetAccessToken(ctx context.Context, account *Account) (string, string, error) {
 	if account.IsShadow() {
 		credAccount, err := resolveCredentialAccount(ctx, s.accountRepo, account)
@@ -1209,6 +1210,14 @@ func (s *OpenAIGatewayService) GetAccessToken(ctx context.Context, account *Acco
 	}
 	switch account.Type {
 	case AccountTypeOAuth:
+		if account.IsMirasim() {
+			// 发行方令牌由 Mirasim 刷新器维护，实际发送前统一换票并签名。
+			token := account.GetOpenAIProtocolAPIKey()
+			if token == "" {
+				return "", "", errors.New("mirasim issuer token not found in credentials")
+			}
+			return token, "oauth", nil
+		}
 		if account.IsOpenAIAgentIdentity() {
 			return "", OpenAIAuthModeAgentIdentity, nil
 		}

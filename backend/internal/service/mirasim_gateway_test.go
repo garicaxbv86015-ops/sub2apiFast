@@ -91,6 +91,41 @@ func TestMirasimGateway_Messages(t *testing.T) {
 	}
 }
 
+// TestMirasimGateway_Responses 验证正式 GPT 入口使用 Mirasim 凭据、中继地址及最终请求签名。
+// 参数 t 为测试上下文；无返回值，失败时报告转发路径差异。
+func TestMirasimGateway_Responses(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		t.Run(fmt.Sprintf("stream=%v", stream), func(t *testing.T) {
+			account := newMirasimGatewayTestAccount(t)
+			account.Credentials["api_base_urls"].(map[string]any)[APIProtocolResponses] = account.GetCredential("base_url") + "/gpt/v1"
+			account.Credentials["model_mapping"] = map[string]any{"client-gpt": "gpt-6-astra"}
+			body := []byte(fmt.Sprintf(`{"model":"client-gpt","input":"hi","stream":%v}`, stream))
+			responseJSON := `{"id":"resp_test","object":"response","status":"completed","model":"gpt-6-astra","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"OK"}]}],"usage":{"input_tokens":1,"output_tokens":1}}`
+			upstream := &httpUpstreamRecorder{resp: &http.Response{
+				StatusCode: http.StatusOK,
+				Header: http.Header{"Content-Type": []string{"text/event-stream"}},
+				Body: io.NopCloser(strings.NewReader("data: {\"type\":\"response.completed\",\"response\":" + responseJSON + "}\n\ndata: [DONE]\n\n")),
+			}}
+			// 保留真实 OpenAI TokenProvider，确保 Mirasim 不再误入其平台校验。
+			svc := &OpenAIGatewayService{cfg: rawChatCompletionsTestConfig(), httpUpstream: upstream, openAITokenProvider: &OpenAITokenProvider{}}
+			c := adaptiveProtocolTestContext("/v1/responses", body)
+			result, err := svc.Forward(context.Background(), c, account, body)
+			require.NoError(t, err)
+			require.Equal(t, stream, result.Stream)
+			require.Equal(t, http.StatusOK, c.Writer.Status())
+			require.NotNil(t, upstream.lastReq)
+			require.Equal(t, account.GetCredential("base_url")+"/gpt/v1/responses", upstream.lastReq.URL.String())
+			require.NotEqual(t, "chatgpt.com", upstream.lastReq.Host)
+			require.Empty(t, upstream.lastReq.Header.Get("Chatgpt-Account-Id"))
+			require.True(t, gjson.GetBytes(upstream.lastBody, "stream").Bool())
+			require.Equal(t, "hi", gjson.GetBytes(upstream.lastBody, "input.0.content.0.text").String())
+			require.Equal(t, "text/event-stream", upstream.lastReq.Header.Get("Accept"))
+			require.Equal(t, "gpt-6-astra", gjson.GetBytes(upstream.lastBody, "model").String())
+			requireMirasimGatewaySignature(t, account, upstream)
+		})
+	}
+}
+
 // TestMirasimGateway_Transport 验证各 HTTP 出口覆盖签名且不消费待发送内容；t 为测试上下文，无返回值。
 func TestMirasimGateway_Transport(t *testing.T) {
 	for _, endpoint := range []string{"/v1/messages", "/v1/responses", "/v1/chat/completions"} {

@@ -1116,10 +1116,9 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 	}
 }
 
-// Models lists visible models, or retrieves the exact list entry for a model path parameter.
-// GET /v1/models and /v1/models/:model (also exposed through root aliases)
-// Returns models based on account configurations (model_mapping whitelist)
-// Falls back to default models if no whitelist is configured
+// Models 根据账号模型映射返回可见模型，未配置映射时使用对应平台的默认目录。
+// 参数 c 提供 API Key 分组与可选模型路径参数；通过响应写入列表或单个模型，无返回值。
+// 支持 GET /v1/models、/v1/models/:model 及根路径别名。
 func (h *GatewayHandler) Models(c *gin.Context) {
 	apiKey, _ := middleware2.GetAPIKeyFromContext(c)
 
@@ -1183,6 +1182,10 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 	}
 	if platform == service.PlatformGrok {
 		writeGrokModelsList(c, xai.DefaultModelIDs())
+		return
+	}
+	if platform == service.PlatformMirasim {
+		writeModelsList(c, platform, service.DefaultMirasimModelIDs())
 		return
 	}
 

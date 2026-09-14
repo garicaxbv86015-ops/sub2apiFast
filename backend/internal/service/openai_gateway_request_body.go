@@ -144,6 +144,23 @@ func normalizeDeepSeekResponsesRequestBody(account *Account, body []byte) []byte
 	return normalized
 }
 
+// normalizeMirasimResponsesRequestBody 适配 Mirasim 仅接受流式和数组 input 的上游契约。
+// 参数 body 为 Responses 请求体；返回兼容请求体及错误，客户端流式偏好由调用方单独保留。
+func normalizeMirasimResponsesRequestBody(body []byte) ([]byte, error) {
+	normalized, err := sjson.SetBytes(body, "stream", true)
+	if err != nil {
+		return nil, err
+	}
+	// 将 Responses 合法的字符串简写转换为等价用户消息，保留原有数组及工具调用。
+	if input := gjson.GetBytes(normalized, "input"); input.Type == gjson.String {
+		return sjson.SetBytes(normalized, "input", []map[string]any{{
+			"role": "user",
+			"content": []map[string]any{{"type": "input_text", "text": input.String()}},
+		}})
+	}
+	return normalized, nil
+}
+
 func trimOpenAIEncryptedReasoningItems(reqBody map[string]any) bool {
 	if len(reqBody) == 0 {
 		return false

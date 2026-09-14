@@ -1347,10 +1347,10 @@ func (a *Account) IsOpenAIOAuthLike() bool {
 	return a != nil && a.IsOpenAI() && (a.Type == AccountTypeOAuth || a.Type == AccountTypeSetupToken)
 }
 
-// UsesOpenAICodexProtocol preserves legacy OpenAI gateway OAuth routing for
-// accounts whose platform is implicit, while adding OpenAI SetupToken.
+// UsesOpenAICodexProtocol 判断账号是否使用 Codex 协议，保留旧 OAuth 与 SetupToken 兼容行为。
+// 接收账号 a，无其他参数；返回是否启用 Codex 身份头，Mirasim 使用自身中继协议。
 func (a *Account) UsesOpenAICodexProtocol() bool {
-	return a != nil && (a.Type == AccountTypeOAuth || a.IsOpenAIOAuthLike())
+	return a != nil && !a.IsMirasim() && (a.Type == AccountTypeOAuth || a.IsOpenAIOAuthLike())
 }
 
 func (a *Account) IsOpenAIChatGPTSubscription() bool {

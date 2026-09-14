@@ -469,6 +469,43 @@ func TestGatewayModels_GeminiGroupFallsBackToGeminiModels(t *testing.T) {
 	require.NotContains(t, modelIDsForTest(got.Data), "claude-sonnet-4-6")
 }
 
+// TestGatewayModels_Mirasim 验证 Mirasim 默认目录包含 GPT，显式映射仍以配置为准。
+// 参数 t 为测试上下文；无返回值，失败时报告模型列表差异。
+func TestGatewayModels_Mirasim(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, tt := range []struct {
+		name    string
+		mapping map[string]any
+		want    []string
+	}{
+		{name: "default", want: service.DefaultMirasimModelIDs()},
+		{name: "mapped", mapping: map[string]any{"custom-gpt": "gpt-6-astra"}, want: []string{"custom-gpt"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			groupID := int64(21)
+			h := newGatewayModelsHandlerForTest(&gatewayModelsAccountRepoStub{
+				byGroup: map[int64][]service.Account{
+					groupID: {{ID: 1, Platform: service.PlatformMirasim, Credentials: map[string]any{"model_mapping": tt.mapping}}},
+				},
+			})
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+			c.Set(string(middleware2.ContextKeyAPIKey), &service.APIKey{
+				Group: &service.Group{ID: groupID, Platform: service.PlatformMirasim},
+			})
+
+			h.Models(c)
+
+			require.Equal(t, http.StatusOK, rec.Code)
+			var got gatewayModelsResponseForTest
+			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
+			require.Equal(t, "list", got.Object)
+			require.ElementsMatch(t, tt.want, modelIDsForTest(got.Data))
+		})
+	}
+}
+
 func TestGatewayModels_Grok45AdvertisesReasoningEffortForGrokBuild(t *testing.T) {
 	assertGrokGatewayReasoningEfforts(t, 4409, "grok-4.5", []gatewayReasoningEffortOptionForTest{
 		{Value: "low", Label: "Low"},
