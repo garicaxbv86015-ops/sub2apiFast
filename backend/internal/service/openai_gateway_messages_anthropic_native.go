@@ -146,6 +146,8 @@ func resolveOpenCodeGoMappedModel(account *Account, body []byte, defaultMappedMo
 	return normalizeOpenAIModelForUpstream(account, billing)
 }
 
+// buildNativeAnthropicUpstreamRequest 根据上下文、账号、请求体、凭据及目标地址构造原生请求。
+// 可选 sessionBodies 用于会话关联；返回请求、最终请求体或错误，Mirasim 需补齐 Claude Code system 标识。
 func (s *OpenAIGatewayService) buildNativeAnthropicUpstreamRequest(
 	ctx context.Context,
 	c *gin.Context,
@@ -173,6 +175,13 @@ func (s *OpenAIGatewayService) buildNativeAnthropicUpstreamRequest(
 	// 的 base 取值同源（GetAnthropicProtocolBaseURL，adaptive 时是 Anthropic 协议
 	// 地址而非 CC/Responses 地址），详见 helper 注释。
 	body = clampOllamaCloudAnthropicMessagesMaxTokens(account, account.GetAnthropicProtocolBaseURL(), body)
+	// Mirasim Claude 中继要求 Claude Code system 标识；复用已有注入逻辑保留用户指令，已有标识不重复添加。
+	if account.IsMirasim() {
+		system := gjson.GetBytes(body, "system").Value()
+		if !systemIncludesClaudeCodePrompt(system) {
+			body = injectClaudeCodePrompt(body, system)
+		}
+	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(body))
 	if err != nil {

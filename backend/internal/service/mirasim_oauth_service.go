@@ -585,7 +585,7 @@ func (s *MirasimOAuthService) BuildAccountCredentials(tokenInfo *MirasimTokenInf
 	return creds
 }
 
-// RefreshAccountToken 刷新 Mirasim 账户的访问 Token。
+// RefreshAccountToken 通过账户代理刷新访问 Token，代理无法解析时返回错误而不直连。
 // 参数：
 //   - ctx: 上下文
 //   - account: 账户实体
@@ -602,12 +602,16 @@ func (s *MirasimOAuthService) RefreshAccountToken(ctx context.Context, account *
 		return nil, fmt.Errorf("no refresh_token found in account credentials")
 	}
 
-	var proxyURL string
-	if account.ProxyID != nil && s.proxyRepo != nil {
+	// 优先复用账号已加载的代理，兼容连接测试中未注入代理仓库的调用。
+	if account.ProxyID != nil && account.Proxy == nil && s.proxyRepo != nil {
 		proxy, err := s.proxyRepo.GetByID(ctx, *account.ProxyID)
 		if err == nil && proxy != nil {
-			proxyURL = proxy.URL()
+			account.Proxy = proxy
 		}
+	}
+	proxyURL, err := mirasimAccountProxyURL(account)
+	if err != nil {
+		return nil, err
 	}
 
 	// 步骤 1: 刷新 Token

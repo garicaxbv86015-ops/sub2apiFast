@@ -19,6 +19,7 @@ import (
 
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/httpclient"
 	"github.com/tidwall/gjson"
 )
 
@@ -62,6 +63,10 @@ type MirasimTicketSession struct {
 	ExpiresAt time.Time
 	// DeviceID 绑定的设备 ID
 	DeviceID string
+	// ProxyURL 换票时使用的代理，代理变更后不复用旧出口的票据。
+	ProxyURL string
+	// BaseURL 签发票据的中继地址，避免跨端点复用。
+	BaseURL string
 }
 
 // MirasimTicketManager 管理 Mirasim 设备票据的换发与内存缓存。
@@ -69,7 +74,6 @@ type MirasimTicketManager struct {
 	mu      sync.RWMutex
 	cache   map[int64]*MirasimTicketSession
 	signer  *MirasimSigner
-	httpCli *http.Client
 }
 
 var (
@@ -84,9 +88,6 @@ func GetMirasimTicketManager() *MirasimTicketManager {
 		defaultMirasimTicketManager = &MirasimTicketManager{
 			cache: make(map[int64]*MirasimTicketSession),
 			signer: signer,
-			httpCli: &http.Client{
-				Timeout: 15 * time.Second,
-			},
 		}
 	})
 	return defaultMirasimTicketManager
@@ -489,10 +490,27 @@ func mirasimQuotaURL(baseURL string) string {
 	return base + mirasimLimitsPath
 }
 
-// GetOrMintTicket 获取当前有效设备票据，若即将过期则重新换发。
-func (m *MirasimTicketManager) GetOrMintTicket(ctx context.Context, account *Account, baseURL string) (string, error) {
+// mirasimAccountProxyURL 从账号读取代理；配置了代理但关联未加载时拒绝直连。
+// 参数 account 为待请求的账号；返回代理 URL（未配置时为空）或配置错误。
+func mirasimAccountProxyURL(account *Account) (string, error) {
 	if account == nil {
 		return "", fmt.Errorf("nil account")
+	}
+	if account.ProxyID == nil {
+		return "", nil
+	}
+	if account.Proxy == nil {
+		return "", fmt.Errorf("mirasim account %d proxy %d is not loaded", account.ID, *account.ProxyID)
+	}
+	return account.Proxy.URL(), nil
+}
+
+// GetOrMintTicket 按账号代理获取有效设备票据，临期或出口变更时重新换发。
+// 参数 ctx 为请求上下文，account 包含凭据及代理，baseURL 为中继地址；返回票据或错误。
+func (m *MirasimTicketManager) GetOrMintTicket(ctx context.Context, account *Account, baseURL string) (string, error) {
+	proxyURL, err := mirasimAccountProxyURL(account)
+	if err != nil {
+		return "", err
 	}
 
 	// 步骤 1: 检查内存缓存中是否存在有效票据
@@ -502,7 +520,7 @@ func (m *MirasimTicketManager) GetOrMintTicket(ctx context.Context, account *Acc
 
 	now := time.Now()
 	// 如果票据存在且距离到期还有 5 分钟以上，直接复用
-	if exists && session != nil && session.Ticket != "" && session.ExpiresAt.After(now.Add(5*time.Minute)) {
+	if exists && session != nil && session.Ticket != "" && session.ProxyURL == proxyURL && session.BaseURL == baseURL && session.ExpiresAt.After(now.Add(5*time.Minute)) {
 		return session.Ticket, nil
 	}
 
@@ -589,7 +607,15 @@ func (m *MirasimTicketManager) GetOrMintTicket(ctx context.Context, account *Acc
 	req.Header.Set(headerMirasimSig, sig)
 	req.Header.Set(headerMirasimClient, clientVersion)
 
-	resp, err := m.httpCli.Do(req)
+	// 换票与模型请求使用相同的账号代理，配置错误或代理不可达时不回退直连。
+	httpCli, err := httpclient.GetClient(httpclient.Options{
+		ProxyURL: proxyURL,
+		Timeout: 15 * time.Second,
+	})
+	if err != nil {
+		return "", fmt.Errorf("configure mirasim ticket proxy failed: %w", err)
+	}
+	resp, err := httpCli.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("mint ticket request failed: %w", err)
 	}
@@ -626,6 +652,8 @@ func (m *MirasimTicketManager) GetOrMintTicket(ctx context.Context, account *Acc
 		Ticket:    ticket,
 		ExpiresAt: expiresAt,
 		DeviceID:  deviceID,
+		ProxyURL:  proxyURL,
+		BaseURL:   baseURL,
 	}
 	m.mu.Lock()
 	m.cache[account.ID] = newSession
@@ -666,7 +694,42 @@ func parseMirasimUsageTiers(bodyBytes []byte) []CNQuotaTier {
 	return tiers
 }
 
-// SignAndSealRelayRequest 为 Mirasim 上游转发请求签名并封套元数据头。
+// signMirasimUpstreamRequest 使用最终出站请求体完成设备签名，保持待发送请求体可读。
+// 参数 req 为协议转换后的请求、account 为账号；返回读取或签名错误，非 Mirasim 账号不处理。
+func signMirasimUpstreamRequest(req *http.Request, account *Account) error {
+	if account == nil || !account.IsMirasim() {
+		return nil
+	}
+	if req == nil {
+		return fmt.Errorf("nil mirasim upstream request")
+	}
+	var bodyBytes []byte
+	if req.Body != nil && req.Body != http.NoBody {
+		if req.GetBody != nil {
+			body, err := req.GetBody()
+			if err != nil {
+				return fmt.Errorf("copy mirasim request body: %w", err)
+			}
+			defer body.Close()
+			bodyBytes, err = io.ReadAll(body)
+			if err != nil {
+				return fmt.Errorf("read mirasim request body: %w", err)
+			}
+		} else {
+			// 不支持复制的请求体读取后恢复，避免签名成功却向上游发送空内容。
+			var err error
+			bodyBytes, err = io.ReadAll(req.Body)
+			_ = req.Body.Close()
+			req.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+			if err != nil {
+				return fmt.Errorf("read mirasim request body: %w", err)
+			}
+		}
+	}
+	return SignAndSealRelayRequest(req.Context(), req, account, bodyBytes)
+}
+
+// SignAndSealRelayRequest 为 Mirasim 上游请求签名、封套元数据，并以设备票据替换原鉴权头。
 // 参数：
 //   - ctx: 上下文
 //   - req: 发往上游的 HTTP 请求对象
@@ -694,6 +757,12 @@ func SignAndSealRelayRequest(ctx context.Context, req *http.Request, account *Ac
 	ticket, err := mgr.GetOrMintTicket(ctx, account, baseURL)
 	if err != nil {
 		return fmt.Errorf("mirasim get ticket: %w", err)
+	}
+	// 正式转发可能保留原始大小写的鉴权头，逐项移除，避免旧 API Key 与设备票据冲突。
+	for key := range req.Header {
+		if strings.EqualFold(key, "authorization") || strings.EqualFold(key, "x-api-key") || strings.EqualFold(key, "x-goog-api-key") {
+			delete(req.Header, key)
+		}
 	}
 	req.Header.Set("Authorization", "Bearer "+ticket)
 

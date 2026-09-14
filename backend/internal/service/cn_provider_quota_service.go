@@ -163,9 +163,17 @@ func (s *CNProviderQuotaService) queryUsageForAccount(ctx context.Context, accou
 }
 
 // doQuotaProbe 执行一次配额探测 HTTP 请求并解析响应。
+// 参数为请求上下文、账号及供应商；返回配额结果或错误，Mirasim 换票前须解析账号代理。
 func (s *CNProviderQuotaService) doQuotaProbe(ctx context.Context, account *Account, provider string) (*CNProviderQuotaProbeResult, error) {
 	apiKey := strings.TrimSpace(account.GetCNAPIKey())
 	baseURL := account.GetOpenAIBaseURL()
+	// 先加载代理关联，保证 Mirasim 换票与后续配额请求使用同一出口。
+	proxyURL := s.resolveProxyURL(ctx, account)
+	if provider == PlatformMirasim {
+		if _, err := mirasimAccountProxyURL(account); err != nil {
+			return nil, err
+		}
+	}
 	var (
 		targetURL  string
 		authHeader string
@@ -213,7 +221,6 @@ func (s *CNProviderQuotaService) doQuotaProbe(ctx context.Context, account *Acco
 	}
 	targetURL = validatedURL
 
-	proxyURL := s.resolveProxyURL(ctx, account)
 	callCtx, cancel := context.WithTimeout(ctx, cnQuotaUpstreamTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(callCtx, http.MethodGet, targetURL, nil)
