@@ -85,7 +85,7 @@ func TestMirasimGateway_Messages(t *testing.T) {
 			require.NotNil(t, result)
 			require.Equal(t, "claude-sonnet-5", gjson.GetBytes(upstream.lastBody, "model").String())
 			require.Equal(t, int64(1), gjson.GetBytes(upstream.lastBody, "messages.0.content.#").Int())
-			require.Equal(t, claudeCodeSystemPrompt, gjson.GetBytes(upstream.lastBody, "system.0.text").String())
+			require.False(t, gjson.GetBytes(upstream.lastBody, "system").Exists())
 			requireMirasimGatewaySignature(t, account, upstream)
 		})
 	}
@@ -165,18 +165,16 @@ func TestMirasimGateway_SigningFailureStopsDispatch(t *testing.T) {
 	require.Empty(t, upstream.requests)
 }
 
-// TestMirasimGateway_SystemCompatibility 验证 system 补齐保留用户指令且对已有标识幂等；t 为测试上下文，无返回值。
+// TestMirasimGateway_SystemCompatibility 验证 system 原样保留且不额外注入身份标识；t 为测试上下文，无返回值。
 func TestMirasimGateway_SystemCompatibility(t *testing.T) {
 	cases := []struct {
 		name string
 		body string
-		preserved string
-		unchanged bool
 	}{
 		{name: "缺省", body: `{"model":"claude-sonnet-5","messages":[{"role":"user","content":"hi"}]}`},
-		{name: "字符串", body: `{"model":"claude-sonnet-5","system":"请使用中文回答。","messages":[{"role":"user","content":"hi"}]}`, preserved: "请使用中文回答。"},
-		{name: "数组", body: `{"model":"claude-sonnet-5","system":[{"type":"text","text":"保持原有业务指令。"}],"messages":[{"role":"user","content":"hi"}]}`, preserved: "保持原有业务指令。"},
-		{name: "已有标识", body: `{"model":"claude-sonnet-5","system":[{"type":"text","text":"You are Claude Code, Anthropic's official CLI for Claude."}],"messages":[{"role":"user","content":"hi"}]}`, unchanged: true},
+		{name: "字符串", body: `{"model":"claude-sonnet-5","system":"请使用中文回答。","messages":[{"role":"user","content":"hi"}]}`},
+		{name: "数组", body: `{"model":"claude-sonnet-5","system":[{"type":"text","text":"保持原有业务指令。"}],"messages":[{"role":"user","content":"hi"}]}`},
+		{name: "已有标识", body: `{"model":"claude-sonnet-5","system":[{"type":"text","text":"You are Claude Code, Anthropic's official CLI for Claude."}],"messages":[{"role":"user","content":"hi"}]}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -185,13 +183,7 @@ func TestMirasimGateway_SystemCompatibility(t *testing.T) {
 			req, body, err := svc.buildNativeAnthropicUpstreamRequest(context.Background(), nil, account, []byte(tc.body), "issuer-token", account.GetOpenAIBaseURL()+"/v1/messages")
 			require.NoError(t, err)
 			defer req.Body.Close()
-			require.True(t, systemIncludesClaudeCodePrompt(gjson.GetBytes(body, "system").Value()))
-			if tc.preserved != "" {
-				require.Contains(t, gjson.GetBytes(body, "system").Raw, tc.preserved)
-			}
-			if tc.unchanged {
-				require.Equal(t, tc.body, string(body))
-			}
+			require.Equal(t, tc.body, string(body))
 			repeated, repeatedBody, err := svc.buildNativeAnthropicUpstreamRequest(context.Background(), nil, account, body, "issuer-token", account.GetOpenAIBaseURL()+"/v1/messages")
 			require.NoError(t, err)
 			defer repeated.Body.Close()
