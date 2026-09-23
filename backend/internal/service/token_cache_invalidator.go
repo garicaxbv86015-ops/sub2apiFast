@@ -20,7 +20,13 @@ func NewCompositeTokenCacheInvalidator(cache GeminiTokenCache) *CompositeTokenCa
 	}
 }
 
+// InvalidateToken 清理账号的平台令牌缓存；ctx 为操作上下文，account 为账号，返回缓存操作错误。
+// Mirasim 使用进程内设备票据，清理不依赖 Redis，也适用于包含设备凭据的非 OAuth 账号。
 func (c *CompositeTokenCacheInvalidator) InvalidateToken(ctx context.Context, account *Account) error {
+	if account != nil && account.IsMirasim() {
+		GetMirasimTicketManager().Invalidate(account.ID, "")
+		return nil
+	}
 	if c == nil || c.cache == nil || account == nil {
 		return nil
 	}

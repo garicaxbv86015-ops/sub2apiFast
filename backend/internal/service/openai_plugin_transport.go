@@ -6,7 +6,7 @@ func (s *OpenAIGatewayService) SetPluginManager(manager *PluginManager) {
 	s.pluginManager = manager
 }
 
-// doOpenAIUpstream 在发送前完成 Mirasim 设备签名，并按绑定配置分派 OpenAI OAuth 插件。
+// doOpenAIUpstream 在发送前完成 Mirasim 设备签名，按需记录限时诊断快照，并按绑定配置分派 OpenAI OAuth 插件。
 // 参数为最终出站请求、代理 URL 和账号；返回上游响应或签名、传输错误。
 // 响应解析、错误映射、SSE 和计费仍由现有核心链处理。
 func (s *OpenAIGatewayService) doOpenAIUpstream(request *http.Request, proxyURL string, account *Account) (*http.Response, error) {
@@ -20,7 +20,11 @@ func (s *OpenAIGatewayService) doOpenAIUpstream(request *http.Request, proxyURL 
 			return response, err
 		}
 	}
-	return s.httpUpstream.Do(request, proxyURL, account.ID, account.Concurrency)
+	request, capture := beginMirasimRequestCapture(request, account)
+	response, err := s.httpUpstream.Do(request, proxyURL, account.ID, account.Concurrency)
+	observeMirasimResponse(account, request, response)
+	capture.finish(response, err)
+	return response, err
 }
 
 // doOpenAIAccountTestUpstream 让 OpenAI OAuth 账号测试与真实转发使用同一插件路径。

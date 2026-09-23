@@ -149,8 +149,10 @@ func prepareNativeOpenAIInputTokensCountRequest(body []byte, account *Account) (
 	}, nil
 }
 
+// shouldEstimateOpenAIInputTokensLocally 根据账号平台和端点判断是否本地估算；参数为账号，返回是否跳过上游计数请求。
+// Mirasim 凭据不适用于 OpenAI 官方计数端点，避免错误的 401 触发账号冷却。
 func shouldEstimateOpenAIInputTokensLocally(account *Account) bool {
-	if account == nil || account.IsGrok() || account.IsCNProvider() || account.Type == AccountTypeUpstream {
+	if account == nil || account.IsGrok() || account.IsCNProvider() || account.IsMirasim() || account.Type == AccountTypeUpstream {
 		return true
 	}
 	if account.Type != AccountTypeAPIKey {
@@ -250,8 +252,8 @@ func estimateAnthropicCountTokensLocally(body []byte) (int, error) {
 	return estimated, nil
 }
 
-// ForwardCountTokensAsAnthropic bridges Anthropic /v1/messages/count_tokens to
-// OpenAI POST /v1/responses/input_tokens and returns Anthropic-compatible output.
+// ForwardCountTokensAsAnthropic 处理 Anthropic 计数请求，受支持账号转发 OpenAI 计数端点，其余使用本地估算。
+// 参数为上下文、HTTP 上下文、账号、请求体和默认映射模型；返回处理错误，计数结果写入 HTTP 响应。
 func (s *OpenAIGatewayService) ForwardCountTokensAsAnthropic(
 	ctx context.Context,
 	c *gin.Context,
@@ -271,7 +273,9 @@ func (s *OpenAIGatewayService) ForwardCountTokensAsAnthropic(
 	// count_tokens 为 "Anthropic only"，Kimi/智谱亦无任何文档承诺。转发上游
 	// 只会常态 404，且错误还会流入账号处置逻辑误伤整账号调度；Claude Code
 	// 高频调用此端点，本地 tiktoken 估算是与 Grok 一致的既有方案。
-	if account.IsCNProvider() || account.IsOpenCodeGo() {
+	// Mirasim 同样使用本地估算，不能将它的 OAuth Token 发送到 api.openai.com，
+	// 否则计数返回的 issuer 401 会误触发账号冷却，导致后续正常对话无账号可用。
+	if account.IsCNProvider() || account.IsOpenCodeGo() || account.IsMirasim() {
 		estimated, err := estimateAnthropicCountTokensLocally(body)
 		if err != nil {
 			writeAnthropicCountTokensError(c, http.StatusBadRequest, "invalid_request_error", "Failed to parse request body")

@@ -66,7 +66,11 @@ func (r *MirasimTokenRefresher) NeedsRefresh(account *Account, globalWindow time
 		return false
 	}
 
-	expiresAt := account.GetCredentialAsTime("expires_at")
+	// 明确的登录凭据错误可提前触发刷新；旧令牌留下的标记不会影响已刷新的令牌。
+	if marker, _ := account.Extra["mirasim_force_refresh_token"].(string); marker != "" && marker == mirasimIssuerFingerprint(account) {
+		return true
+	}
+	expiresAt := mirasimAccountExpiresAt(account)
 	if expiresAt == nil {
 		return false
 	}

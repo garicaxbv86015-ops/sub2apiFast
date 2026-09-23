@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -62,6 +63,8 @@ type CNProviderQuotaProbeResult struct {
 	FetchedAt       int64         `json:"fetched_at"`
 	Persisted       bool          `json:"persisted"`
 	Error           string        `json:"error,omitempty"`
+	// mirasimAuth 指定认证失败的恢复方式，仅用于本次探测。
+	mirasimAuth mirasimAuthKind
 }
 
 // CNProviderQuotaService 探测 Kimi / Zhipu Coding Plan 的滚动窗口用量。
@@ -148,14 +151,23 @@ func (s *CNProviderQuotaService) queryUsageForAccount(ctx context.Context, accou
 
 	result, err := s.doQuotaProbe(ctx, account, provider)
 	if err != nil {
+		var authErr *mirasimMintAuthError
+		if provider == PlatformMirasim && errors.As(err, &authErr) && authErr.kind == mirasimAuthLogin {
+			if s.refreshMirasimToken(ctx, account) == nil {
+				return s.doQuotaProbe(ctx, account, provider)
+			}
+		}
 		return nil, err
 	}
-	// 401/403 时对 Mirasim 再尝试一次「刷新 token + 重放探测」：
-	// 覆盖 token 在探测途中过期、或 ensureMirasimTokenFresh 失败但 refresh_token 仍可用的场景。
+	// 只重试一次只读探测：票据失效先重新换票，明确的登录凭据失效才刷新登录。
 	if provider == PlatformMirasim && !result.CredentialValid {
-		if s.refreshMirasimToken(ctx, account) == nil {
-			if retry, rerr := s.doQuotaProbe(ctx, account, provider); rerr == nil {
-				return retry, nil
+		retry := result.mirasimAuth == mirasimAuthTicket
+		if result.mirasimAuth == mirasimAuthLogin {
+			retry = s.refreshMirasimToken(ctx, account) == nil
+		}
+		if retry {
+			if next, rerr := s.doQuotaProbe(ctx, account, provider); rerr == nil {
+				return next, nil
 			}
 		}
 	}
@@ -193,9 +205,11 @@ func (s *CNProviderQuotaService) doQuotaProbe(ctx context.Context, account *Acco
 			cred = apiKey
 		}
 		if account.GetMirasimPrivateKey() != "" {
-			if ticket, err := GetMirasimTicketManager().GetOrMintTicket(ctx, account, baseURL); err == nil && ticket != "" {
-				cred = ticket
+			ticket, err := GetMirasimTicketManager().GetOrMintTicket(ctx, account, baseURL)
+			if err != nil {
+				return nil, err
 			}
+			cred = ticket
 		}
 		authHeader = "Bearer " + cred
 	case PlatformZhipu:
@@ -232,7 +246,9 @@ func (s *CNProviderQuotaService) doQuotaProbe(ctx context.Context, account *Acco
 	if provider == PlatformMirasim {
 		req.Header.Set("x-mirasim-probe", "usage")
 		cred := strings.TrimPrefix(authHeader, "Bearer ")
-		_ = SignMirasimRelayRequest(callCtx, account, req, nil, cred)
+		if err := SignMirasimRelayRequest(callCtx, account, req, nil, cred); err != nil {
+			return nil, err
+		}
 	}
 	if provider == PlatformZhipu || provider == PlatformMiniMax {
 		req.Header.Set("Content-Type", "application/json")
@@ -265,6 +281,10 @@ func (s *CNProviderQuotaService) doQuotaProbe(ctx context.Context, account *Acco
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
 		// 鉴权失败：不落快照（不覆盖之前的有效值），仅返回失败结果供前端提示。
 		result.Error = fmt.Sprintf("Authentication failed (HTTP %d)", resp.StatusCode)
+		if provider == PlatformMirasim {
+			observeMirasimResponse(account, req, resp)
+			result.mirasimAuth, result.Error = classifyMirasimAuth(bodyBytes)
+		}
 		return result, nil
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -329,7 +349,7 @@ const mirasimRefreshLeeway = 2 * time.Minute
 // ensureMirasimTokenFresh 探测前主动刷新已过期的 Mirasim access token。
 // 失败不阻断探测（refresh_token 可能临时不可用），返回后由 401 重试路径兜底。
 func (s *CNProviderQuotaService) ensureMirasimTokenFresh(ctx context.Context, account *Account) {
-	expiresAt := account.GetCredentialAsTime("expires_at")
+	expiresAt := mirasimAccountExpiresAt(account)
 	if expiresAt == nil || time.Until(*expiresAt) > mirasimRefreshLeeway {
 		return
 	}

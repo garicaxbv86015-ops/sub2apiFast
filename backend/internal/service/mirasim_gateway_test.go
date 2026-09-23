@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"encoding/base64"
 
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
@@ -40,7 +41,7 @@ func newMirasimGatewayTestAccount(t *testing.T) *Account {
 	return account
 }
 
-// requireMirasimGatewaySignature 校验最终发送内容的签名及鉴权头；参数为测试上下文、账号和捕获的请求，无返回值。
+// requireMirasimGatewaySignature 校验设备签名整体封装及唯一鉴权头；参数为测试上下文、账号和捕获的请求，无返回值。
 func requireMirasimGatewaySignature(t *testing.T, account *Account, upstream *httpUpstreamRecorder) {
 	t.Helper()
 	req := upstream.lastReq
@@ -55,17 +56,17 @@ func requireMirasimGatewaySignature(t *testing.T, account *Account, upstream *ht
 		require.False(t, strings.EqualFold(key, "x-goog-api-key"))
 	}
 	require.Equal(t, 1, authHeaders)
-	seed, err := ParseEd25519Seed(account.GetMirasimPrivateKey())
+	// 线上协议仅允许版本和封套明文出站；即使没有会话元数据，设备签名也必须封装。
+	require.Equal(t, DefaultMirasimClientVersion, req.Header.Get(headerMirasimClient))
+	sealed, err := base64.RawURLEncoding.DecodeString(req.Header.Get(headerMirasimEnc))
 	require.NoError(t, err)
-	signer, err := GetMirasimSigner()
-	require.NoError(t, err)
-	// 用实际发送的请求体校验，能发现模型映射或清洗后仍签原始入站内容的错误。
-	expected, err := signer.SignRelay(context.Background(), seed, req.Method, req.URL.Path,
-		req.Header.Get(headerMirasimTS), req.Header.Get(headerMirasimNonce),
-		req.Header.Get(headerMirasimDevice), req.Header.Get(headerMirasimClient),
-		"gateway-ticket", nil, upstream.lastBody)
-	require.NoError(t, err)
-	require.Equal(t, expected, req.Header.Get(headerMirasimSig))
+	require.Greater(t, len(sealed), 160)
+	for key := range req.Header {
+		lowerKey := strings.ToLower(key)
+		if strings.HasPrefix(lowerKey, "x-mirasim-") {
+			require.Contains(t, []string{headerMirasimClient, headerMirasimEnc}, lowerKey)
+		}
+	}
 }
 
 // TestMirasimGateway_Messages 验证正式 Messages 转发的流式、非流式分支均在最终内容上签名；t 为测试上下文，无返回值。

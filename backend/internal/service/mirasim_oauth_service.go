@@ -201,11 +201,12 @@ func (s *MirasimOAuthService) ExchangeCode(ctx context.Context, input *MirasimEx
 		return nil, fmt.Errorf("generate device key failed: %w", err)
 	}
 
+	expiresIn, expiresAt := mirasimTokenLifetime(accessToken, 0, time.Now())
 	res := &MirasimTokenInfo{
 		AccessToken:  accessToken,
 		RefreshToken: strings.TrimSpace(parsed.RefreshToken),
-		ExpiresIn:    86400,
-		ExpiresAt:    time.Now().Add(24 * time.Hour).Unix(),
+		ExpiresIn:    expiresIn,
+		ExpiresAt:    expiresAt,
 		DeviceID:     deviceID,
 		PrivateKey:   privPEM,
 		PublicKeyB64: pubKeyB64,
@@ -306,16 +307,13 @@ func (s *MirasimOAuthService) VerifyEmailCode(ctx context.Context, email, code s
 		return nil, fmt.Errorf("generate device key failed: %w", err)
 	}
 
-	expiresIn := tokenResp.ExpiresIn
-	if expiresIn <= 0 {
-		expiresIn = 86400
-	}
+	expiresIn, expiresAt := mirasimTokenLifetime(tokenResp.AccessToken, tokenResp.ExpiresIn, time.Now())
 
 	res := &MirasimTokenInfo{
 		AccessToken:  tokenResp.AccessToken,
 		RefreshToken: tokenResp.RefreshToken,
 		ExpiresIn:    expiresIn,
-		ExpiresAt:    time.Now().Add(time.Duration(expiresIn) * time.Second).Unix(),
+		ExpiresAt:    expiresAt,
 		Email:        email,
 		DeviceID:     deviceID,
 		PrivateKey:   privPEM,
@@ -375,16 +373,13 @@ func (s *MirasimOAuthService) ValidateRefreshToken(ctx context.Context, refreshT
 		return nil, fmt.Errorf("generate device key failed: %w", err)
 	}
 
-	expiresIn := tokenResp.ExpiresIn
-	if expiresIn <= 0 {
-		expiresIn = 86400
-	}
+	expiresIn, expiresAt := mirasimTokenLifetime(tokenResp.AccessToken, tokenResp.ExpiresIn, time.Now())
 
 	res := &MirasimTokenInfo{
 		AccessToken:  tokenResp.AccessToken,
 		RefreshToken: tokenResp.RefreshToken,
 		ExpiresIn:    expiresIn,
-		ExpiresAt:    time.Now().Add(time.Duration(expiresIn) * time.Second).Unix(),
+		ExpiresAt:    expiresAt,
 		DeviceID:     deviceID,
 		PrivateKey:   privPEM,
 		PublicKeyB64: pubKeyB64,
@@ -506,11 +501,12 @@ func (s *MirasimOAuthService) ImportLocalMirasimApp(ctx context.Context) (*Miras
 		fmt.Printf("[MirasimOAuth] warning: get local user info failed: %v\n", err)
 	}
 
+	expiresIn, expiresAt := mirasimTokenLifetime(token, 0, time.Now())
 	res := &MirasimTokenInfo{
 		AccessToken:  token,
 		RefreshToken: refreshToken,
-		ExpiresIn:    86400,
-		ExpiresAt:    time.Now().Add(24 * time.Hour).Unix(),
+		ExpiresIn:    expiresIn,
+		ExpiresAt:    expiresAt,
 		Email:        settingData.Auth.Email,
 		Name:         settingData.Auth.Name,
 		DeviceID:     deviceID,
@@ -627,21 +623,7 @@ func (s *MirasimOAuthService) RefreshAccountToken(ctx context.Context, account *
 		fmt.Printf("[MirasimOAuth] warning: get user info failed: %v\n", err)
 	}
 
-	expiresIn := tokenResp.ExpiresIn
-	if expiresIn <= 0 {
-		expiresIn = 3600
-	}
-	expiresAt := time.Now().Add(time.Duration(expiresIn) * time.Second).Unix()
-	// 上游 /auth/refresh 未返回 expires_in 时，直接解析 access_token 的 JWT exp，
-	// 避免兜底时长与上游实际 TTL（当前为 1 小时）不一致导致刷新器误判未过期。
-	if jwtExp, err := mirasim.ParseJWTExpiresAt(tokenResp.AccessToken); err == nil && jwtExp > 0 {
-		expiresAt = jwtExp
-		secs := int64(time.Until(time.Unix(jwtExp, 0)).Seconds())
-		if secs < 0 {
-			secs = 0
-		}
-		expiresIn = secs
-	}
+	expiresIn, expiresAt := mirasimTokenLifetime(tokenResp.AccessToken, tokenResp.ExpiresIn, time.Now())
 
 	res := &MirasimTokenInfo{
 		AccessToken:  tokenResp.AccessToken,
@@ -664,4 +646,33 @@ func (s *MirasimOAuthService) RefreshAccountToken(ctx context.Context, account *
 	}
 
 	return res, nil
+}
+
+// mirasimTokenLifetime 统一令牌期限；参数为令牌、上游有效秒数和当前时间，返回剩余秒数及到期时间戳。
+// JWT exp 仅作为期限元数据读取，不用于认证；非 JWT 且上游未给期限时保守按一小时处理。
+func mirasimTokenLifetime(token string, expiresIn int64, now time.Time) (int64, int64) {
+	if exp, err := mirasim.ParseJWTExpiresAt(token); err == nil && exp > 0 {
+		remaining := exp - now.Unix()
+		if remaining < 0 {
+			remaining = 0
+		}
+		return remaining, exp
+	}
+	if expiresIn <= 0 {
+		expiresIn = 3600
+	}
+	return expiresIn, now.Unix() + expiresIn
+}
+
+// mirasimAccountExpiresAt 读取账号实际期限；参数为账号，优先 JWT exp，返回到期时间或未知时的 nil。
+// 此处兼容历史导入账号写入的错误 expires_at，无需批量重写凭据。
+func mirasimAccountExpiresAt(account *Account) *time.Time {
+	if account == nil {
+		return nil
+	}
+	if exp, err := mirasim.ParseJWTExpiresAt(account.GetMirasimIssuerToken()); err == nil && exp > 0 {
+		at := time.Unix(exp, 0)
+		return &at
+	}
+	return account.GetCredentialAsTime("expires_at")
 }

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"sort"
 
 	"github.com/tetratelabs/wazero"
 )
@@ -209,11 +210,17 @@ func (s *MirasimSigner) SignRelay(
 	}
 	canonicalBytes := []byte(strings.Join(canonicalParts, "\x00"))
 
-	// 步骤 2: 构造 extra headers 字符串（若有）
+	// 步骤 2: 按字段名稳定拼接元数据，与 JSON 封套的字段顺序一致，避免 Go map 遍历影响签名。
 	var metaBytes []byte
 	if len(extraMeta) > 0 {
 		var metaParts []string
-		for k, v := range extraMeta {
+		keys := make([]string, 0, len(extraMeta))
+		for k := range extraMeta {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			v := extraMeta[k]
 			if strings.TrimSpace(v) != "" {
 				metaParts = append(metaParts, k, v)
 			}
@@ -287,11 +294,16 @@ func (s *MirasimSigner) SignRelay(
 //   - string: Base64URL 格式的封套数据（对应 x-mirasim-enc）
 //   - error: 错误信息
 func (s *MirasimSigner) SealMetadata(ctx context.Context, metaJsonBytes []byte, method, path string) (string, error) {
+	return s.sealMetadataWithKey(ctx, metaJsonBytes, method, path, MirasimSealPublicKey)
+}
+
+// sealMetadataWithKey 按指定接收公钥加密元数据；参数为上下文、JSON、方法、路径和 Base64 公钥，返回封套或错误。
+func (s *MirasimSigner) sealMetadataWithKey(ctx context.Context, metaJsonBytes []byte, method, path, publicKey string) (string, error) {
 	if err := s.init(); err != nil {
 		return "", err
 	}
 
-	sealPubkey, err := base64.StdEncoding.DecodeString(MirasimSealPublicKey)
+	sealPubkey, err := base64.StdEncoding.DecodeString(publicKey)
 	if err != nil {
 		return "", fmt.Errorf("decode seal pubkey: %w", err)
 	}

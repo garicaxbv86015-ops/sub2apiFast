@@ -306,7 +306,7 @@ type TokenResponse struct {
 }
 
 // ParseJWTExpiresAt 解析 JWT 的 exp 声明并返回 Unix 秒时间戳。
-// 仅做 payload 解码（不验签），用于在响应未带 expires_in 时同步真实过期时间。
+// 仅做 payload 解码（不验签），用于同步真实过期时间；兼容省略 Base64URL 填充的 JWT。
 // 参数：
 //   - token: 完整 JWT 字符串
 // 返回值：
@@ -322,7 +322,7 @@ func ParseJWTExpiresAt(token string) (int64, error) {
 		return 0, fmt.Errorf("invalid jwt format")
 	}
 	payload := parts[1]
-	payload += strings.Repeat("=", -len(payload)%4)
+	payload += strings.Repeat("=", (4-len(payload)%4)%4)
 	raw, err := base64.URLEncoding.DecodeString(payload)
 	if err != nil {
 		return 0, fmt.Errorf("decode jwt payload: %w", err)

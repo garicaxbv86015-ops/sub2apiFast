@@ -507,6 +507,7 @@ func (s *AccountTestService) testMirasimAnthropicConnection(c *gin.Context, acco
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
+		observeMirasimResponse(account, req, resp)
 		return s.sendErrorAndEnd(c, fmt.Sprintf("Mirasim Anthropic returned %d: %s", resp.StatusCode, string(body)))
 	}
 	return s.processClaudeStream(c, resp.Body)
@@ -564,6 +565,7 @@ func (s *AccountTestService) testMirasimResponsesConnection(c *gin.Context, acco
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
+		observeMirasimResponse(account, req, resp)
 		return s.sendErrorAndEnd(c, fmt.Sprintf("Mirasim Responses returned %d: %s", resp.StatusCode, string(body)))
 	}
 	return s.processOpenAIStream(c, resp.Body)

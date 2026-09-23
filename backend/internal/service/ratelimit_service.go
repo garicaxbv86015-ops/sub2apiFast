@@ -423,6 +423,27 @@ func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Acc
 		if resolved, rerr := resolveCredentialAccount(ctx, s.accountRepo, account); rerr == nil && resolved != nil {
 			authAccount = resolved
 		}
+		// Mirasim 模型接口使用短期设备票据；协议和票据错误不能触发登录撤销或永久禁用。
+		if authAccount.IsMirasim() {
+			kind, reason := classifyMirasimAuth(responseBody)
+			if kind != mirasimAuthLogin {
+				cooldown := 30 * time.Second
+				if kind == mirasimAuthProtocol {
+					cooldown = 10 * time.Minute
+				}
+				until := time.Now().Add(cooldown)
+				s.notifyAccountSchedulingBlocked(authAccount, until, "mirasim_401_"+string(kind))
+				if err := s.accountRepo.SetTempUnschedulable(ctx, authAccount.ID, until, reason); err != nil {
+					slog.Warn("mirasim_401_set_temp_unschedulable_failed", "account_id", authAccount.ID, "error", err)
+				}
+				shouldDisable = true
+				break
+			}
+			// 标记当前登录令牌需要刷新；摘要随换新令牌自动失配，避免旧 401 反复触发刷新。
+			if err := s.accountRepo.UpdateExtra(ctx, authAccount.ID, map[string]any{"mirasim_force_refresh_token": mirasimIssuerFingerprint(authAccount)}); err != nil {
+				slog.Warn("mirasim_401_force_refresh_mark_failed", "account_id", authAccount.ID, "error", err)
+			}
+		}
 		// OpenAI: token_invalidated / token_revoked 表示 token 被永久作废（非过期），直接标记 error
 		openai401Code := extractUpstreamErrorCode(responseBody)
 		if authAccount.Platform == PlatformOpenAI && (openai401Code == "token_invalidated" || openai401Code == "token_revoked") {

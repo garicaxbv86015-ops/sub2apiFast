@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"crypto/sha256"
 	"crypto/rand"
 	"crypto/x509"
 	"encoding/base64"
@@ -13,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -67,6 +69,8 @@ type MirasimTicketSession struct {
 	ProxyURL string
 	// BaseURL 签发票据的中继地址，避免跨端点复用。
 	BaseURL string
+	// Fingerprint 绑定凭据、设备密钥、版本与出口的摘要，不保存明文凭据。
+	Fingerprint [32]byte
 }
 
 // MirasimTicketManager 管理 Mirasim 设备票据的换发与内存缓存。
@@ -74,6 +78,8 @@ type MirasimTicketManager struct {
 	mu      sync.RWMutex
 	cache   map[int64]*MirasimTicketSession
 	signer  *MirasimSigner
+	// flights 保存每个账号当前有效的换票任务，删除后旧任务不能回填。
+	flights map[int64]*mirasimTicketFlight
 }
 
 var (
@@ -413,6 +419,12 @@ func DeriveSPKIPublicKey(pubBytes []byte) (string, string, error) {
 // 返回值：
 //   - error: 签名失败时返回错误
 func SignMirasimRelayRequest(ctx context.Context, account *Account, req *http.Request, bodyBytes []byte, credential string) error {
+	return signMirasimRelayRequestWithMetadata(ctx, account, req, bodyBytes, credential, nil)
+}
+
+// signMirasimRelayRequestWithMetadata 对最终请求体及明文会话元数据签名，供后续整体封装。
+// 参数为上下文、账号、请求、最终请求体、票据及元数据；签名头写入 req，失败时返回错误。
+func signMirasimRelayRequestWithMetadata(ctx context.Context, account *Account, req *http.Request, bodyBytes []byte, credential string, metadata map[string]string) error {
 	if account == nil || req == nil {
 		return nil
 	}
@@ -459,7 +471,7 @@ func SignMirasimRelayRequest(ctx context.Context, account *Account, req *http.Re
 		deviceID,
 		clientVersion,
 		credential,
-		nil,
+		metadata,
 		bodyBytes,
 	)
 	if err != nil {
@@ -505,61 +517,123 @@ func mirasimAccountProxyURL(account *Account) (string, error) {
 	return account.Proxy.URL(), nil
 }
 
-// GetOrMintTicket 按账号代理获取有效设备票据，临期或出口变更时重新换发。
-// 参数 ctx 为请求上下文，account 包含凭据及代理，baseURL 为中继地址；返回票据或错误。
+// mirasimTicketFlight 表示同账号共享的换票任务，完成后通过 done 发布结果。
+type mirasimTicketFlight struct {
+	// fingerprint 为本次换票使用的配置摘要。
+	fingerprint [32]byte
+	// done 在结果写入后关闭，让等待者安全读取。
+	done chan struct{}
+	// ticket 和 err 保存一次换票的结果。
+	ticket string
+	err error
+}
+
+// Invalidate 清除账号票据及在途任务；ticket 非空时只清理匹配票据，避免迟到的 401 清除新票据。
+// 参数为账号 ID 和被拒绝票据（主动刷新时传空）；无返回值，不取消其他调用者上下文。
+func (m *MirasimTicketManager) Invalidate(accountID int64, ticket string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if ticket != "" {
+		session := m.cache[accountID]
+		if session == nil || session.Ticket != ticket {
+			return
+		}
+	}
+	delete(m.cache, accountID)
+	delete(m.flights, accountID)
+}
+
+// GetOrMintTicket 按账号及完整配置合并换票；ctx 只控制当前等待者，account 和 baseURL 指定凭据与端点。
+// 返回有效票据或错误；换票独立限时，失效中的旧任务不得回填缓存或返回旧票据。
 func (m *MirasimTicketManager) GetOrMintTicket(ctx context.Context, account *Account, baseURL string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	proxyURL, err := mirasimAccountProxyURL(account)
 	if err != nil {
 		return "", err
 	}
-
-	// 步骤 1: 检查内存缓存中是否存在有效票据
-	m.mu.RLock()
-	session, exists := m.cache[account.ID]
-	m.mu.RUnlock()
-
-	now := time.Now()
-	// 如果票据存在且距离到期还有 5 分钟以上，直接复用
-	if exists && session != nil && session.Ticket != "" && session.ProxyURL == proxyURL && session.BaseURL == baseURL && session.ExpiresAt.After(now.Add(5*time.Minute)) {
-		return session.Ticket, nil
-	}
-
-	// 步骤 2: 获取换票凭据
 	privKeyStr := strings.TrimSpace(account.GetMirasimPrivateKey())
 	issuerToken := strings.TrimSpace(account.GetMirasimIssuerToken())
 	if issuerToken == "" {
-		// 回退使用通用 API Key 或 token
 		issuerToken = strings.TrimSpace(account.GetCNAPIKey())
 	}
-	if privKeyStr == "" {
-		// 没有私钥时，直接使用已有的 Token/Ticket
-		if issuerToken != "" {
-			return issuerToken, nil
-		}
-		return "", fmt.Errorf("mirasim account %d has neither private_key nor issuer_token/api_key", account.ID)
+	if privKeyStr == "" || issuerToken == "" {
+		return "", fmt.Errorf("mirasim account %d requires private_key and issuer_token for a signed session", account.ID)
 	}
+	clientVersion := strings.TrimSpace(account.GetCredential("client_version"))
+	if clientVersion == "" {
+		clientVersion = DefaultMirasimClientVersion
+	}
+	baseURL = strings.TrimRight(baseURL, "/")
+	encoded, _ := json.Marshal([]string{privKeyStr, issuerToken, clientVersion, proxyURL, baseURL})
+	fingerprint := sha256.Sum256(encoded)
+	accountID := account.ID
+	m.mu.Lock()
+	if session := m.cache[accountID]; session != nil && session.Fingerprint == fingerprint && session.Ticket != "" && session.ExpiresAt.After(time.Now().Add(time.Minute)) {
+		m.mu.Unlock()
+		return session.Ticket, nil
+	}
+	if m.cache == nil {
+		m.cache = make(map[int64]*MirasimTicketSession)
+	}
+	if m.flights == nil {
+		m.flights = make(map[int64]*mirasimTicketFlight)
+	}
+	flight := m.flights[accountID]
+	if flight == nil || flight.fingerprint != fingerprint {
+		delete(m.cache, accountID)
+		flight = &mirasimTicketFlight{fingerprint: fingerprint, done: make(chan struct{})}
+		m.flights[accountID] = flight
+		// 只传递不可变快照；首个等待者取消不影响同账号其他请求。
+		go func(f *mirasimTicketFlight) {
+			mintCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+			defer cancel()
+			session, mintErr := m.mintTicket(mintCtx, privKeyStr, issuerToken, clientVersion, proxyURL, baseURL)
+			m.mu.Lock()
+			defer m.mu.Unlock()
+			if m.flights[accountID] != f {
+				f.err = fmt.Errorf("mirasim ticket configuration changed or cache invalidated during mint")
+			} else {
+				delete(m.flights, accountID)
+				f.err = mintErr
+				if mintErr == nil {
+					session.Fingerprint = fingerprint
+					m.cache[accountID] = session
+					f.ticket = session.Ticket
+				}
+			}
+			close(f.done)
+		}(flight)
+	}
+	m.mu.Unlock()
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err()
+	case <-flight.done:
+		return flight.ticket, flight.err
+	}
+}
+
+// mintTicket 使用凭据、版本、代理和端点快照完成一次签名换票；ctx 限制总耗时，返回会话或错误。
+func (m *MirasimTicketManager) mintTicket(ctx context.Context, privKeyStr, issuerToken, clientVersion, proxyURL, baseURL string) (*MirasimTicketSession, error) {
 
 	seed, err := ParseEd25519Seed(privKeyStr)
 	if err != nil {
-		return "", fmt.Errorf("invalid mirasim private_key: %w", err)
+		return nil, fmt.Errorf("invalid mirasim private_key: %w", err)
 	}
 
 	// 步骤 3: 确定公钥与设备标识 Device ID
 	pubBytes, err := m.signer.DerivePublicKey(ctx, seed)
 	if err != nil {
-		return "", fmt.Errorf("derive ed25519 pubkey failed: %w", err)
+		return nil, fmt.Errorf("derive ed25519 pubkey failed: %w", err)
 	}
 	pubKeyB64, derivedDevID, err := DeriveSPKIPublicKey(pubBytes)
 	if err != nil {
-		return "", fmt.Errorf("derive spki pubkey failed: %w", err)
+		return nil, fmt.Errorf("derive spki pubkey failed: %w", err)
 	}
 
 	deviceID := derivedDevID
-
-	clientVersion := strings.TrimSpace(account.GetCredential("client_version"))
-	if clientVersion == "" {
-		clientVersion = DefaultMirasimClientVersion
-	}
 
 	// 步骤 4: 构造 POST /v1/device/session 请求体
 	bodyObj := map[string]string{
@@ -568,10 +642,14 @@ func (m *MirasimTicketManager) GetOrMintTicket(ctx context.Context, account *Acc
 	}
 	bodyBytes, err := json.Marshal(bodyObj)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	mintURL := strings.TrimRight(baseURL, "/") + mirasimDeviceSessionPath
+	mintTarget, err := url.Parse(mintURL)
+	if err != nil {
+		return nil, err
+	}
 	ts := fmt.Sprintf("%d", time.Now().UnixMilli())
 	nonce := GenerateMirasimNonce()
 
@@ -580,7 +658,7 @@ func (m *MirasimTicketManager) GetOrMintTicket(ctx context.Context, account *Acc
 		ctx,
 		seed,
 		http.MethodPost,
-		mirasimDeviceSessionPath,
+		mintTarget.Path,
 		ts,
 		nonce,
 		deviceID,
@@ -590,12 +668,12 @@ func (m *MirasimTicketManager) GetOrMintTicket(ctx context.Context, account *Acc
 		bodyBytes,
 	)
 	if err != nil {
-		return "", fmt.Errorf("sign device session request failed: %w", err)
+		return nil, fmt.Errorf("sign device session request failed: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, mintURL, bytes.NewReader(bodyBytes))
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if issuerToken != "" {
@@ -613,30 +691,38 @@ func (m *MirasimTicketManager) GetOrMintTicket(ctx context.Context, account *Acc
 		Timeout: 15 * time.Second,
 	})
 	if err != nil {
-		return "", fmt.Errorf("configure mirasim ticket proxy failed: %w", err)
+		return nil, fmt.Errorf("configure mirasim ticket proxy failed: %w", err)
 	}
 	resp, err := httpCli.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("mint ticket request failed: %w", err)
+		return nil, fmt.Errorf("mint ticket request failed: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	respBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", fmt.Errorf("read mint ticket response failed: %w", err)
+		return nil, fmt.Errorf("read mint ticket response failed: %w", err)
 	}
 
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		kind, reason := classifyMirasimAuth(respBytes)
+		if kind == mirasimAuthTicket {
+			// 换票请求使用 issuer_token，这一阶段的 token_invalid 才代表登录凭据失效。
+			kind, reason = mirasimAuthLogin, "Mirasim 登录凭据无法换取设备票据"
+		}
+		return nil, &mirasimMintAuthError{kind: kind, reason: fmt.Sprintf("mint ticket (HTTP %d): %s", resp.StatusCode, reason)}
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("mint ticket upstream error (HTTP %d): %s", resp.StatusCode, string(respBytes))
+		return nil, fmt.Errorf("mint ticket upstream error (HTTP %d): %s", resp.StatusCode, string(respBytes))
 	}
 
 	ticket := gjson.GetBytes(respBytes, "ticket").String()
 	if ticket == "" {
-		return "", fmt.Errorf("no ticket returned in mint response: %s", string(respBytes))
+		return nil, fmt.Errorf("no ticket returned in mint response: %s", string(respBytes))
 	}
 
 	expiresIn := gjson.GetBytes(respBytes, "expiresIn").Int()
-	expiresAt := time.Now().Add(time.Hour)
+	expiresAt := time.Now().Add(5 * time.Minute)
 	if expiresIn > 0 {
 		expiresAt = time.Now().Add(time.Duration(expiresIn) * time.Second)
 	} else if exp := gjson.GetBytes(respBytes, "expiresAt").Int(); exp > 0 {
@@ -647,7 +733,11 @@ func (m *MirasimTicketManager) GetOrMintTicket(ctx context.Context, account *Acc
 		}
 	}
 
-	// 步骤 6: 写入缓存
+	if !expiresAt.After(time.Now()) {
+		return nil, fmt.Errorf("mirasim returned an expired device ticket")
+	}
+
+	// 步骤 6: 返回会话，由共享任务检查失效状态后写入缓存
 	newSession := &MirasimTicketSession{
 		Ticket:    ticket,
 		ExpiresAt: expiresAt,
@@ -655,11 +745,7 @@ func (m *MirasimTicketManager) GetOrMintTicket(ctx context.Context, account *Acc
 		ProxyURL:  proxyURL,
 		BaseURL:   baseURL,
 	}
-	m.mu.Lock()
-	m.cache[account.ID] = newSession
-	m.mu.Unlock()
-
-	return ticket, nil
+	return newSession, nil
 }
 
 // parseMirasimUsageTiers 解析 Mirasim /v1/limits 返回的配额窗口。
@@ -729,7 +815,7 @@ func signMirasimUpstreamRequest(req *http.Request, account *Account) error {
 	return SignAndSealRelayRequest(req.Context(), req, account, bodyBytes)
 }
 
-// SignAndSealRelayRequest 为 Mirasim 上游请求签名、封套元数据，并以设备票据替换原鉴权头。
+// SignAndSealRelayRequest 以设备票据替换鉴权头，对最终内容签名后整体封装设备签名与会话元数据。
 // 参数：
 //   - ctx: 上下文
 //   - req: 发往上游的 HTTP 请求对象
@@ -738,8 +824,20 @@ func signMirasimUpstreamRequest(req *http.Request, account *Account) error {
 // 返回值：
 //   - error: 处理过程中的错误
 func SignAndSealRelayRequest(ctx context.Context, req *http.Request, account *Account, bodyBytes []byte) error {
+	return signAndSealMirasimRequest(ctx, req, account, bodyBytes, MirasimSealPublicKey)
+}
+
+// signAndSealMirasimRequest 执行完整出站签名；参数额外指定接收方公钥以便使用独立接收端验证协议，返回处理错误。
+// 正式入口固定使用官方公钥，账号配置不能覆盖接收方公钥。
+func signAndSealMirasimRequest(ctx context.Context, req *http.Request, account *Account, bodyBytes []byte, sealPublicKey string) error {
 	if account == nil || !account.IsMirasim() {
 		return nil
+	}
+	if req == nil {
+		return fmt.Errorf("nil mirasim upstream request")
+	}
+	if strings.TrimSpace(account.GetMirasimPrivateKey()) == "" {
+		return fmt.Errorf("mirasim account %d requires private_key for a signed session", account.ID)
 	}
 
 	signer, err := GetMirasimSigner()
@@ -770,47 +868,47 @@ func SignAndSealRelayRequest(ctx context.Context, req *http.Request, account *Ac
 	if clientVersion == "" {
 		clientVersion = DefaultMirasimClientVersion
 	}
-	req.Header.Set(headerMirasimClient, clientVersion)
 
-	// 步骤 2: 提取并封套 x-mirasim-* 元数据
+	// 步骤 2: 丢弃入站或重试残留的设备签名，提取本次需要参与签名的会话元数据。
 	metaMap := make(map[string]string)
-	var keysToDelete []string
 	for k, v := range req.Header {
 		lowerK := strings.ToLower(k)
-		if strings.HasPrefix(lowerK, "x-mirasim-") &&
-			lowerK != headerMirasimDevice &&
-			lowerK != headerMirasimTS &&
-			lowerK != headerMirasimNonce &&
-			lowerK != headerMirasimSig &&
-			lowerK != headerMirasimClient &&
-			lowerK != headerMirasimEnc &&
-			lowerK != headerMirasimProbe {
-			if len(v) > 0 {
+		switch lowerK {
+		case headerMirasimDevice, headerMirasimTS, headerMirasimNonce, headerMirasimSig, headerMirasimEnc:
+			delete(req.Header, k)
+		case headerMirasimClient:
+			delete(req.Header, k)
+		default:
+			if strings.HasPrefix(lowerK, "x-mirasim-") && len(v) > 0 && v[0] != "" {
 				metaMap[lowerK] = v[0]
 			}
-			keysToDelete = append(keysToDelete, k)
 		}
 	}
+	req.Header.Set(headerMirasimClient, clientVersion)
 
-	// 删除原明文元数据头
-	for _, k := range keysToDelete {
-		req.Header.Del(k)
-	}
-
-	// 若存在元数据，调用 WASM 封套为 x-mirasim-enc
-	if len(metaMap) > 0 {
-		metaJsonBytes, _ := json.Marshal(metaMap)
-		encVal, err := signer.SealMetadata(ctx, metaJsonBytes, req.Method, req.URL.Path)
-		if err != nil {
-			return fmt.Errorf("seal metadata failed: %w", err)
-		}
-		req.Header.Set(headerMirasimEnc, encVal)
-	}
-
-	// 步骤 3: 若配置了私钥，为请求进行设备签名（附加 x-mirasim-*）
-	if err := SignMirasimRelayRequest(ctx, account, req, bodyBytes, ticket); err != nil {
+	// 步骤 3: 先签名，再把新生成的四个设备认证字段加入封套；无会话元数据时也必须封装。
+	if err := signMirasimRelayRequestWithMetadata(ctx, account, req, bodyBytes, ticket, metaMap); err != nil {
 		return fmt.Errorf("sign relay request failed: %w", err)
 	}
+	for _, key := range []string{headerMirasimDevice, headerMirasimTS, headerMirasimNonce, headerMirasimSig} {
+		metaMap[key] = req.Header.Get(key)
+	}
+	metaJsonBytes, err := json.Marshal(metaMap)
+	if err != nil {
+		return fmt.Errorf("marshal relay metadata failed: %w", err)
+	}
+	encVal, err := signer.sealMetadataWithKey(ctx, metaJsonBytes, req.Method, req.URL.Path, sealPublicKey)
+	if err != nil {
+		return fmt.Errorf("seal metadata failed: %w", err)
+	}
+	// 步骤 4: 只保留版本号和加密封套，不能把设备签名留在明文头中，否则上游返回 client_outdated。
+	for key := range req.Header {
+		lowerKey := strings.ToLower(key)
+		if strings.HasPrefix(lowerKey, "x-mirasim-") && lowerKey != headerMirasimClient {
+			delete(req.Header, key)
+		}
+	}
+	req.Header.Set(headerMirasimEnc, encVal)
 
 	return nil
 }
