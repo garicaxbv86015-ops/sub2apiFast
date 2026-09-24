@@ -31,6 +31,10 @@ func TestClaudeOpus55Pricing(t *testing.T) {
 				require.InDelta(t, 0.2e-6, pricing.CacheReadPricePerToken, 1e-12)
 				require.InDelta(t, 5e-6, pricing.CacheCreation5mPrice, 1e-12)
 				require.InDelta(t, 8e-6, pricing.CacheCreation1hPrice, 1e-12)
+				require.InDelta(t, 8e-6, pricing.InputPricePerTokenPriority, 1e-12)
+				require.InDelta(t, 40e-6, pricing.OutputPricePerTokenPriority, 1e-12)
+				require.InDelta(t, 10e-6, pricing.CacheCreationPricePerTokenPriority, 1e-12)
+				require.InDelta(t, 0.4e-6, pricing.CacheReadPricePerTokenPriority, 1e-12)
 			}
 			old, err := svc.GetModelPricing("claude-opus-5")
 			require.NoError(t, err)
