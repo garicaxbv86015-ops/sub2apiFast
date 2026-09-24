@@ -366,6 +366,11 @@ func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Acc
 		return true
 	}
 
+	// Mirasim 的家族额度先于通用 429 规则处理，避免 Claude/Fable 限额误停整个账号。
+	if statusCode == http.StatusTooManyRequests && s.persistMirasimExhaustedWindow(ctx, account, headers, responseBody) {
+		return false
+	}
+
 	// Anthropic official 5h / 7d window exhaustion is a hard account limit.
 	// It must take precedence over user-configured 429 temp-unsched rules,
 	// otherwise a broad "rate limit" keyword rule can shorten a multi-hour

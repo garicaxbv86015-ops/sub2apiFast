@@ -218,6 +218,7 @@ func (s *OpenAIGatewayService) buildNativeAnthropicUpstreamRequest(
 	account.ApplyHeaderOverrides(req.Header)
 	payloads := append([][]byte{body}, sessionBodies...)
 	applyOpenCodeSessionHeader(c, account, targetURL, req.Header, payloads...)
+	applyMirasimSessionHeader(c, account, req.Header, payloads...)
 
 	return req, body, nil
 }

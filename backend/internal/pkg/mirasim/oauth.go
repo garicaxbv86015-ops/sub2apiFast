@@ -336,6 +336,38 @@ func ParseJWTExpiresAt(token string) (int64, error) {
 	return claims.Exp, nil
 }
 
+// ParseJWTSubject 解析 JWT 的 sub 声明并返回主体标识。
+// 仅做 payload 解码（不验签），用于取出登录用户/设备票据的账号 ID；兼容省略 Base64URL 填充的 JWT。
+// 参数：
+//   - token: 完整 JWT 字符串
+// 返回值：
+//   - string: sub 声明的值，缺失时返回空串
+//   - error: 解析失败时返回错误
+func ParseJWTSubject(token string) (string, error) {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return "", fmt.Errorf("empty jwt")
+	}
+	parts := strings.Split(token, ".")
+	if len(parts) < 2 {
+		return "", fmt.Errorf("invalid jwt format")
+	}
+	payload := parts[1]
+	// 补齐 Base64URL 填充，兼容省略 "=" 的 JWT。
+	payload += strings.Repeat("=", (4-len(payload)%4)%4)
+	raw, err := base64.URLEncoding.DecodeString(payload)
+	if err != nil {
+		return "", fmt.Errorf("decode jwt payload: %w", err)
+	}
+	var claims struct {
+		Sub string `json:"sub"`
+	}
+	if err := json.Unmarshal(raw, &claims); err != nil {
+		return "", fmt.Errorf("unmarshal jwt claims: %w", err)
+	}
+	return claims.Sub, nil
+}
+
 // UserInfo Mirasim /auth/me 返回的当前登录用户概要信息。
 type UserInfo struct {
 	// Email 用户邮箱地址

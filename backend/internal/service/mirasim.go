@@ -35,7 +35,7 @@ const (
 	// DefaultMirasimAuthBaseURL 是 Mirasim 默认鉴权服务地址。
 	DefaultMirasimAuthBaseURL = "https://auth.mirasim.ai"
 	// DefaultMirasimClientVersion 是 Mirasim 客户端默认版本号。
-	DefaultMirasimClientVersion = "0.0.322"
+	DefaultMirasimClientVersion = "0.0.348"
 	// DefaultMirasimTestModel 是管理员测试连接时的回退模型。
 	DefaultMirasimTestModel = "claude-haiku-4-5-20251001"
 
@@ -863,6 +863,9 @@ func signAndSealMirasimRequest(ctx context.Context, req *http.Request, account *
 		}
 	}
 	req.Header.Set("Authorization", "Bearer "+ticket)
+	if err := prepareMirasimRelayMetadata(req, ticket, bodyBytes); err != nil {
+		return err
+	}
 
 	clientVersion := strings.TrimSpace(account.GetCredential("client_version"))
 	if clientVersion == "" {
