@@ -47,7 +47,7 @@ func mirasimSessionID(headers http.Header, bodies ...[]byte) string {
 	return ""
 }
 
-// prepareMirasimRelayMetadata 对齐官方 App 0.0.348 的 relay 推理请求。
+// prepareMirasimRelayMetadata 对齐官方 App 0.0.354 的 relay 推理请求。
 // 会话、账号、语言与调用标识在设备签名前写入请求头，随后随设备认证字段一起封装；额度查询不添加推理元数据。
 // 参数：
 //   - req: 发往上游的 HTTP 请求对象

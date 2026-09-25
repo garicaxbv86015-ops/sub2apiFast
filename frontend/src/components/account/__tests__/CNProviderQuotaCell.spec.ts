@@ -84,6 +84,57 @@ describe('CNProviderQuotaCell', () => {
     expect(bars[1].props('resetsAt')).toBe('2026-08-22T00:00:00+08:00')
   })
 
+  it('renders Mirasim windows with readable labels, tooltips, distinct colors and wide badges', async () => {
+    const mirasimAccount = {
+      id: 8,
+      platform: 'mirasim',
+      type: 'oauth',
+      credentials: {},
+      extra: {
+        mirasim_5h_used_percent: 5,
+        mirasim_5h_reset_at: '2026-09-24T12:00:00+08:00',
+        mirasim_7d_used_percent: 21,
+        mirasim_7d_reset_at: '2026-09-30T12:00:00+08:00',
+        mirasim_7d_claude_used_percent: 2,
+        mirasim_7d_claude_reset_at: '2026-09-30T12:00:00+08:00',
+        mirasim_7d_fable_used_percent: 0,
+        mirasim_7d_fable_reset_at: '2026-09-30T12:00:00+08:00',
+        mirasim_usage_updated_at: new Date().toISOString()
+      }
+    } as unknown as Account
+    const wrapper = mount(CNProviderQuotaCell, { props: { account: mirasimAccount } })
+    await flushPromises()
+
+    // 新鲜快照直接渲染，不触发探测
+    expect(queryQuota).not.toHaveBeenCalled()
+    const bars = wrapper.findAllComponents(UsageProgressBar)
+    expect(bars).toHaveLength(4)
+
+    // 原生窗口名（7d_claude / 7d_fable）不再直接透传，改用可读文案 key
+    expect(bars.map((b) => b.props('label'))).toEqual([
+      'admin.accounts.cnProviders.window5h',
+      'admin.accounts.cnProviders.windowWeekly',
+      'admin.accounts.cnProviders.window7dClaude',
+      'admin.accounts.cnProviders.window7dFable'
+    ])
+    // 模型家族窗口与共享窗口配色区分
+    expect(bars.map((b) => b.props('color'))).toEqual(['indigo', 'emerald', 'purple', 'amber'])
+    // 整格统一加宽徽章，保证纵向对齐
+    expect(bars.every((b) => b.props('labelWidth') === 'wide')).toBe(true)
+    // 悬浮说明透传到行根节点
+    expect(bars[2].attributes('title')).toBe('admin.accounts.cnProviders.window7dClaudeTooltip')
+    expect(bars[3].attributes('title')).toBe('admin.accounts.cnProviders.window7dFableTooltip')
+  })
+
+  it('keeps the default fixed badge width for non-Mirasim CN providers', async () => {
+    const wrapper = mount(CNProviderQuotaCell, { props: { account } })
+    await flushPromises()
+
+    const bars = wrapper.findAllComponents(UsageProgressBar)
+    expect(bars.length).toBeGreaterThan(0)
+    expect(bars.every((b) => b.props('labelWidth') === 'fixed')).toBe(true)
+  })
+
   it('labels the refresh control with an explicit action verb, not a data caption', async () => {
     const wrapper = mount(CNProviderQuotaCell, { props: { account } })
     await flushPromises()

@@ -34,8 +34,10 @@ const (
 	DefaultMirasimBaseURL = "https://relay.mirasim.ai"
 	// DefaultMirasimAuthBaseURL 是 Mirasim 默认鉴权服务地址。
 	DefaultMirasimAuthBaseURL = "https://auth.mirasim.ai"
-	// DefaultMirasimClientVersion 是 Mirasim 客户端默认版本号。
-	DefaultMirasimClientVersion = "0.0.348"
+	// DefaultMirasimClientVersion 是 Mirasim 客户端默认版本号，对齐当前官方 App。
+	// 0.0.348 与 0.0.354 的中继元数据头逐字节一致，升版本只为与官方客户端保持同步，
+	// 避免中继后续按版本做准入时被判为 client_outdated。
+	DefaultMirasimClientVersion = "0.0.354"
 	// DefaultMirasimTestModel 是管理员测试连接时的回退模型。
 	DefaultMirasimTestModel = "claude-haiku-4-5-20251001"
 

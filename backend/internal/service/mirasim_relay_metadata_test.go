@@ -128,7 +128,7 @@ func TestMirasimRelayMetadataSignedGateway(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "client-conversation", getHeaderRaw(req.Header, "x-mirasim-session"))
 	require.NoError(t, signAndSealMirasimRequest(context.Background(), req, account, finalBody, base64.StdEncoding.EncodeToString(secret.PublicKey().Bytes())))
-	require.Equal(t, "0.0.348", req.Header.Get(headerMirasimClient))
+	require.Equal(t, DefaultMirasimClientVersion, req.Header.Get(headerMirasimClient))
 	require.Equal(t, "effort-2025-11-24", req.Header.Get("anthropic-beta"))
 	envelope, err := base64.RawURLEncoding.DecodeString(req.Header.Get(headerMirasimEnc))
 	require.NoError(t, err)

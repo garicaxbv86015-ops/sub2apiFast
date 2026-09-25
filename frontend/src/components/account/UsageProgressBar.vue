@@ -35,7 +35,7 @@
 
     <!-- Progress bar row -->
     <div class="flex items-center gap-1">
-      <!-- Label badge (label-width: fixed = 定宽居中, auto = 限宽截断左对齐) -->
+      <!-- Label badge (label-width: fixed = 定宽居中, wide = 加宽定宽居中, auto = 限宽截断左对齐) -->
       <span :class="[labelSizeClass, labelClass]">
         {{ label }}
       </span>
@@ -78,8 +78,8 @@ const props = withDefaults(
     estimatedTotalCost?: number | null
     showNowWhenIdle?: boolean
     remainingCapacity?: boolean
-    /** fixed: 定宽居中徽章（账号页纵向对齐）；auto: 限宽截断左对齐（监控页组合标签） */
-    labelWidth?: 'fixed' | 'auto'
+    /** fixed: 定宽居中徽章（账号页纵向对齐）；wide: 加宽定宽居中（Mirasim「7d Claude」类长标签，仍保持纵向对齐）；auto: 限宽截断左对齐（监控页组合标签） */
+    labelWidth?: 'fixed' | 'wide' | 'auto'
   }>(),
   { labelWidth: 'fixed' }
 )
@@ -120,13 +120,18 @@ const labelClass = computed(() => {
   return colors[props.color]
 })
 
-// Label badge width mode: fixed 定宽保证账号页纵向对齐；auto 限宽截断适配
-// 监控页「Pro/7 天」类组合标签。百分比列在两种模式下保持不变。
-const labelSizeClass = computed(() =>
-  props.labelWidth === 'auto'
-    ? 'max-w-[72px] shrink-0 truncate rounded px-1 text-left text-[10px] font-medium'
-    : 'w-[32px] shrink-0 rounded px-1 text-center text-[10px] font-medium'
-)
+// Label badge width mode: fixed 定宽保证账号页纵向对齐；wide 加宽定宽，
+// 容纳 Mirasim「7d Claude」类长标签且同一单元格内各行仍纵向对齐（超长兜底截断）；
+// auto 限宽截断适配监控页「Pro/7 天」类组合标签。百分比列在三种模式下保持不变。
+const labelSizeClass = computed(() => {
+  if (props.labelWidth === 'auto') {
+    return 'max-w-[72px] shrink-0 truncate rounded px-1 text-left text-[10px] font-medium'
+  }
+  if (props.labelWidth === 'wide') {
+    return 'w-[60px] shrink-0 truncate whitespace-nowrap rounded px-1 text-center text-[10px] font-medium'
+  }
+  return 'w-[32px] shrink-0 rounded px-1 text-center text-[10px] font-medium'
+})
 
 // Progress bar color based on utilization
 const barClass = computed(() => {

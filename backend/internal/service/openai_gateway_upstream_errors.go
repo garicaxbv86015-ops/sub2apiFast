@@ -397,6 +397,9 @@ func (s *OpenAIGatewayService) newOpenAIAccountFailoverErrorWithClassificationHe
 		failoverErr.SameAccountRetryDeadline = s.openAIOAuth429RetryDeadline(account)
 		failoverErr.SameAccountRetryDelay = openAIOAuth429SameAccountRetryDelay(responseHeaders, failoverErr.SameAccountRetryDeadline)
 	}
+	// Mirasim 中继模型级容量降载：补一道请求内的同账号短退避重试。
+	// 收敛在这里而不是各转发路径，保证 messages / responses / CC 各入口一致。
+	applyMirasimRelayCapacityFailover(failoverErr, account, statusCode, upstreamMsg, responseBody, shouldDisable)
 	return failoverErr
 }
 

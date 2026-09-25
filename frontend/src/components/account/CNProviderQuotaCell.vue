@@ -5,14 +5,18 @@
     class="min-w-[220px] space-y-1"
   >
     <!-- Tier rows: 5h + weekly utilization bars (snapshot renders on mount).
-         复用账号页 UsageProgressBar：同阈值配色、同倒计时格式。 -->
+         复用账号页 UsageProgressBar：同阈值配色、同倒计时格式。
+         Mirasim 有「7d Claude / 7d Fable」长标签，整格统一用加宽徽章保证纵向对齐；
+         title 透传到行根节点，悬浮可查看窗口含义。 -->
     <div v-if="data?.success && data.tiers?.length" class="space-y-1">
       <UsageProgressBar
         v-for="tier in data.tiers"
         :key="tier.window"
         data-test="cn-provider-quota-tier"
         :label="windowLabel(tier.window)"
-        :color="tier.window === 'weekly' || tier.window.startsWith('7d') ? 'emerald' : 'indigo'"
+        :title="windowTooltip(tier.window)"
+        :label-width="labelWidthMode"
+        :color="windowColor(tier.window)"
         :utilization="tier.used_percent"
         :resets-at="tier.reset_at"
       />
@@ -177,12 +181,54 @@ const truncatedError = computed(() => {
   return error.value.length > 80 ? `${error.value.slice(0, 80)}...` : error.value
 })
 
+// 标签徽章宽度：Mirasim 含「7d Claude / 7d Fable」长标签，整格用 wide 加宽定宽
+// （同格及跨行进度条纵向对齐）；其余 CN 平台标签均为短标签，保持默认 fixed。
+const labelWidthMode = computed<'fixed' | 'wide'>(() =>
+  props.account.platform === 'mirasim' ? 'wide' : 'fixed'
+)
+
+/**
+ * 窗口名 → 徽章展示文案。
+ * @param window 后端窗口名（5h / weekly / monthly / Mirasim 的 7d / 7d_claude / 7d_fable）
+ * @returns 本地化后的短标签；未知的 Mirasim 扩展窗口原样透传
+ */
 const windowLabel = (window: string) => {
-  if (window === 'weekly') return t('admin.accounts.cnProviders.windowWeekly')
+  // Mirasim 的 7d 与标准 weekly 同义，统一显示为周窗口文案。
+  if (window === 'weekly' || window === '7d') return t('admin.accounts.cnProviders.windowWeekly')
   if (window === 'monthly') return t('admin.accounts.cnProviders.windowMonthly')
-  // Mirasim 原生窗口名（5h / 7d / 7d_claude / 7d_fable）直接透传展示。
+  // Mirasim 模型家族周窗口：原生名带下划线（7d_claude）可读性差，换成「7d Claude」类文案。
+  if (window === '7d_claude') return t('admin.accounts.cnProviders.window7dClaude')
+  if (window === '7d_fable') return t('admin.accounts.cnProviders.window7dFable')
+  // 后端新增的其他扩展窗口：原样透传，避免被误标成 5h。
   if (window.startsWith('7d')) return window
   return t('admin.accounts.cnProviders.window5h')
+}
+
+/**
+ * 窗口名 → 悬浮说明（解释窗口含义及计入范围）。
+ * @param window 后端窗口名
+ * @returns 本地化说明文案；未知窗口返回原窗口名
+ */
+const windowTooltip = (window: string) => {
+  if (window === '5h') return t('admin.accounts.cnProviders.window5hTooltip')
+  if (window === 'weekly' || window === '7d') return t('admin.accounts.cnProviders.windowWeeklyTooltip')
+  if (window === 'monthly') return t('admin.accounts.cnProviders.windowMonthlyTooltip')
+  if (window === '7d_claude') return t('admin.accounts.cnProviders.window7dClaudeTooltip')
+  if (window === '7d_fable') return t('admin.accounts.cnProviders.window7dFableTooltip')
+  return window
+}
+
+/**
+ * 窗口名 → 徽章配色：5h/月 靛蓝、周 翠绿；Mirasim 模型家族窗口分别用紫/琥珀，
+ * 与共享周窗口区分开，一眼可辨是哪类额度。
+ * @param window 后端窗口名
+ * @returns UsageProgressBar 支持的色板名
+ */
+const windowColor = (window: string): 'indigo' | 'emerald' | 'purple' | 'amber' => {
+  if (window === '7d_claude') return 'purple'
+  if (window === '7d_fable') return 'amber'
+  if (window === 'weekly' || window.startsWith('7d')) return 'emerald'
+  return 'indigo'
 }
 
 const handleProbe = async () => {

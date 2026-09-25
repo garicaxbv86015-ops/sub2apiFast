@@ -181,6 +181,29 @@ describe('UsageProgressBar', () => {
     expect(percent.classes()).toContain('text-right')
   })
 
+  it('labelWidth=wide 时标签加宽定宽居中（容纳 Mirasim 长标签），百分比列保持不变', () => {
+    const wrapper = mount(UsageProgressBar, {
+      props: {
+        label: '7d Claude',
+        utilization: 30,
+        color: 'purple',
+        labelWidth: 'wide'
+      }
+    })
+
+    const label = wrapper.get('.gap-1 > span')
+    expect(label.text()).toBe('7d Claude')
+    expect(label.classes()).toContain('w-[60px]')
+    expect(label.classes()).toContain('text-center')
+    expect(label.classes()).toContain('truncate')
+    expect(label.classes()).not.toContain('w-[32px]')
+    expect(label.classes()).not.toContain('max-w-[72px]')
+
+    const percent = wrapper.get('.h-1\\.5 + span')
+    expect(percent.classes()).toContain('w-[32px]')
+    expect(percent.classes()).toContain('text-right')
+  })
+
   it('labelWidth=auto 时标签限宽截断左对齐，百分比列保持不变', () => {
     const wrapper = mount(UsageProgressBar, {
       props: {
