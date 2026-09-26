@@ -3,57 +3,33 @@ package service
 import (
 	"context"
 	"log"
-	"sync"
 	"time"
 )
 
 // AccountExpiryService periodically pauses expired accounts when auto-pause is enabled.
 type AccountExpiryService struct {
 	accountRepo AccountRepository
-	interval    time.Duration
-	stopCh      chan struct{}
-	stopOnce    sync.Once
-	wg          sync.WaitGroup
+	runner      *periodicRunner
 }
 
 func NewAccountExpiryService(accountRepo AccountRepository, interval time.Duration) *AccountExpiryService {
-	return &AccountExpiryService{
-		accountRepo: accountRepo,
-		interval:    interval,
-		stopCh:      make(chan struct{}),
-	}
+	s := &AccountExpiryService{accountRepo: accountRepo}
+	s.runner = newPeriodicRunner(interval, s.runOnce)
+	return s
 }
 
 func (s *AccountExpiryService) Start() {
-	if s == nil || s.accountRepo == nil || s.interval <= 0 {
+	if s == nil || s.accountRepo == nil {
 		return
 	}
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
-		ticker := time.NewTicker(s.interval)
-		defer ticker.Stop()
-
-		s.runOnce()
-		for {
-			select {
-			case <-ticker.C:
-				s.runOnce()
-			case <-s.stopCh:
-				return
-			}
-		}
-	}()
+	s.runner.Start()
 }
 
 func (s *AccountExpiryService) Stop() {
 	if s == nil {
 		return
 	}
-	s.stopOnce.Do(func() {
-		close(s.stopCh)
-	})
-	s.wg.Wait()
+	s.runner.Stop()
 }
 
 func (s *AccountExpiryService) runOnce() {

@@ -3,50 +3,33 @@ package service
 import (
 	"context"
 	"log"
-	"sync"
 	"time"
 )
 
 // ProxyExpiryService 周期扫描到期代理并把绑定账号改投备用/直连。
 type ProxyExpiryService struct {
 	proxyRepo ProxyRepository
-	interval  time.Duration
-	stopCh    chan struct{}
-	stopOnce  sync.Once
-	wg        sync.WaitGroup
+	runner    *periodicRunner
 }
 
 func NewProxyExpiryService(proxyRepo ProxyRepository, interval time.Duration) *ProxyExpiryService {
-	return &ProxyExpiryService{proxyRepo: proxyRepo, interval: interval, stopCh: make(chan struct{})}
+	s := &ProxyExpiryService{proxyRepo: proxyRepo}
+	s.runner = newPeriodicRunner(interval, s.runOnce)
+	return s
 }
 
 func (s *ProxyExpiryService) Start() {
-	if s == nil || s.proxyRepo == nil || s.interval <= 0 {
+	if s == nil || s.proxyRepo == nil {
 		return
 	}
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
-		ticker := time.NewTicker(s.interval)
-		defer ticker.Stop()
-		s.runOnce()
-		for {
-			select {
-			case <-ticker.C:
-				s.runOnce()
-			case <-s.stopCh:
-				return
-			}
-		}
-	}()
+	s.runner.Start()
 }
 
 func (s *ProxyExpiryService) Stop() {
 	if s == nil {
 		return
 	}
-	s.stopOnce.Do(func() { close(s.stopCh) })
-	s.wg.Wait()
+	s.runner.Stop()
 }
 
 func (s *ProxyExpiryService) runOnce() {
